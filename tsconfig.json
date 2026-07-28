@@ -1,0 +1,15 @@
+{
+  /* Repo-wide check so a bare `npx tsc --noEmit` at the root covers every
+     workspace. The per-workspace configs (server/tsconfig.json,
+     client/tsconfig.json) additionally check each side under its own module
+     resolution — Node ESM for the server, bundler for the client. */
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["node", "vite/client"]
+  },
+  "include": ["shared/**/*.ts", "server/**/*.ts", "client/src/**/*.ts", "client/src/**/*.tsx", "client/vite.config.ts"]
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "ES2023",
+    "skipLibCheck": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+
+    /* The server runs .ts files directly through Node's type stripping.
+       Types are erased, never compiled, so anything that needs codegen
+       (enum / namespace / parameter properties) must fail at type-check time,
+       and every type-only import must say so explicitly. */
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+
+    /* Imports carry the real ".ts" extension because Node ESM requires it. */
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  }
+}
