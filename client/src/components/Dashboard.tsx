@@ -1,6 +1,10 @@
-import { useEffect, useState } from "react";
-import type { SessionUser } from "../../../shared/types.ts";
-import { getHabits, logout } from "../api.ts";
+import { useState } from "react";
+import { toISODate } from "../../../shared/domain.ts";
+import type { CreateHabitRequest, Habit, SessionUser, UpdateHabitRequest } from "../../../shared/types.ts";
+import { ApiError, logout } from "../api.ts";
+import { useHabits } from "../hooks/useHabits.ts";
+import { HabitForm } from "./HabitForm.tsx";
+import { TodayPanel } from "./TodayPanel.tsx";
 
 type DashboardProps = {
   user: SessionUser;
@@ -8,36 +12,22 @@ type DashboardProps = {
 };
 
 /**
- * The signed-in view. Phase 2 only owns the shell (who is signed in, and the way
- * out); Phase 3 fills in today's habits.
+ * The signed-in view: who is here, today's habits, and the form that maintains
+ * them.
+ *
+ * **This is where "today" is decided.** The browser's calendar day is read once,
+ * on mount, and handed to everything below as a `YYYY-MM-DD` string; no server
+ * code ever derives a date (docs/design.md). Reading it once also means the day
+ * cannot change under a rendered list mid-session.
  */
-type HabitsState =
-  | { status: "loading" }
-  | { status: "ready"; count: number }
-  | { status: "error"; message: string };
-
 export function Dashboard({ user, onLoggedOut }: DashboardProps) {
-  const [habits, setHabits] = useState<HabitsState>({ status: "loading" });
+  const [today] = useState(() => toISODate(new Date()));
+  const { habits, values, status, error, createHabit, updateHabit, deleteHabit, setValue } = useHabits(today);
+
+  /** The habit currently open in the form, or null while creating a new one. */
+  const [editing, setEditing] = useState<Habit | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    // A 401 here means the session died while the tab was open; api.ts routes
-    // that back to the login screen, so there is nothing to handle locally.
-    getHabits()
-      .then((list) => {
-        if (!cancelled) setHabits({ status: "ready", count: list.length });
-      })
-      .catch((cause: unknown) => {
-        if (cancelled) return;
-        setHabits({ status: "error", message: cause instanceof Error ? cause.message : String(cause) });
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   async function handleLogout(): Promise<void> {
     if (pending) return;
@@ -48,6 +38,31 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
       // Even if the request failed, the local session is over: the next API call
       // would 401 anyway, and leaving the user stuck on the dashboard is worse.
       onLoggedOut();
+    }
+  }
+
+  async function handleCreate(input: CreateHabitRequest): Promise<Habit> {
+    setActionError(null);
+    // Errors are deliberately not caught here — the form shows them next to the
+    // fields the user just filled in.
+    return await createHabit(input);
+  }
+
+  async function handleUpdate(id: number, patch: UpdateHabitRequest): Promise<Habit> {
+    setActionError(null);
+    const updated = await updateHabit(id, patch);
+    // Only leave edit mode once the change actually landed.
+    setEditing(null);
+    return updated;
+  }
+
+  async function handleDelete(habit: Habit): Promise<void> {
+    setActionError(null);
+    try {
+      await deleteHabit(habit.id);
+      if (editing?.id === habit.id) setEditing(null);
+    } catch (cause) {
+      setActionError(cause instanceof ApiError ? cause.message : "習慣を削除できませんでした");
     }
   }
 
@@ -65,31 +80,30 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
         <p className="dashboard__user" data-testid="current-user">
           {user.username} としてログイン中
         </p>
+        {actionError !== null && (
+          <p className="form__error" role="alert">
+            {actionError}
+          </p>
+        )}
       </section>
 
-      <section className="card" aria-labelledby="today-heading">
-        <h2 className="card__title" id="today-heading">
-          今日の習慣
-        </h2>
-        <HabitsSummary habits={habits} />
-      </section>
+      <TodayPanel
+        today={today}
+        habits={habits}
+        values={values}
+        status={status}
+        error={error}
+        onSetValue={setValue}
+        onEdit={setEditing}
+        onDelete={handleDelete}
+      />
+
+      <HabitForm
+        habit={editing}
+        onCreate={handleCreate}
+        onUpdate={handleUpdate}
+        onCancelEdit={() => setEditing(null)}
+      />
     </>
   );
-}
-
-function HabitsSummary({ habits }: { habits: HabitsState }) {
-  if (habits.status === "loading") return <p className="muted">読み込み中…</p>;
-
-  // Failing loudly rather than showing a permanent "loading" (see AC-6.4).
-  if (habits.status === "error") {
-    return (
-      <p className="form__error" role="alert">
-        習慣を読み込めませんでした（{habits.message}）
-      </p>
-    );
-  }
-
-  if (habits.count === 0) return <p className="muted">習慣がまだ登録されていません。</p>;
-
-  return <p className="muted">{habits.count} 件の習慣</p>;
 }

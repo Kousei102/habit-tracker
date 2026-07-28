@@ -1,9 +1,15 @@
 import type {
+  CreateHabitRequest,
+  DeleteHabitResponse,
+  Entry,
   ErrorResponse,
+  Habit,
   HealthResponse,
   LoginRequest,
   LogoutResponse,
   MeResponse,
+  PutEntryRequest,
+  UpdateHabitRequest,
 } from "../../shared/types.ts";
 
 export class ApiError extends Error {
@@ -36,12 +42,19 @@ type RequestOptions = {
    * place, not a sign that the current session died.
    */
   notifyUnauthorized?: boolean;
+  /**
+   * Ask the browser to finish the request even if the page navigates away.
+   * Recording a habit is a fire-and-forget write that a user may follow with an
+   * immediate reload; without this, the tick they just made could be lost.
+   */
+  keepalive?: boolean;
 };
 
 async function requestJson<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",
     headers: { Accept: "application/json", ...init?.headers },
+    keepalive: options?.keepalive ?? false,
     ...init,
   });
 
@@ -64,16 +77,20 @@ async function requestJson<T>(path: string, init?: RequestInit, options?: Reques
   return (await response.json()) as T;
 }
 
-function postJson<T>(path: string, body: unknown, options?: RequestOptions): Promise<T> {
+function sendJson<T>(method: string, path: string, body: unknown, options?: RequestOptions): Promise<T> {
   return requestJson<T>(
     path,
     {
-      method: "POST",
+      method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     },
     options,
   );
+}
+
+function postJson<T>(path: string, body: unknown, options?: RequestOptions): Promise<T> {
+  return sendJson<T>("POST", path, body, options);
 }
 
 export function getHealth(): Promise<HealthResponse> {
@@ -93,7 +110,35 @@ export function getMe(): Promise<MeResponse> {
   return requestJson<MeResponse>("/api/auth/me");
 }
 
-/** Habit list. The shape lands in Phase 3; Phase 2 only needs the auth check. */
-export function getHabits(): Promise<unknown[]> {
-  return requestJson<unknown[]>("/api/habits");
+/** The active (non-archived) habits of the signed-in user, in display order. */
+export function getHabits(): Promise<Habit[]> {
+  return requestJson<Habit[]>("/api/habits");
+}
+
+export function createHabit(input: CreateHabitRequest): Promise<Habit> {
+  return postJson<Habit>("/api/habits", input);
+}
+
+export function updateHabit(id: number, patch: UpdateHabitRequest): Promise<Habit> {
+  return sendJson<Habit>("PATCH", `/api/habits/${id}`, patch);
+}
+
+/** Archives the habit. Its entries are kept — this is a logical delete. */
+export function deleteHabit(id: number): Promise<DeleteHabitResponse> {
+  return requestJson<DeleteHabitResponse>(`/api/habits/${id}`, { method: "DELETE" });
+}
+
+/**
+ * Records within an inclusive date range. Both bounds are `YYYY-MM-DD` strings
+ * decided by the client — the server never asks its own clock what day it is.
+ */
+export function getEntries(from: string, to: string): Promise<Entry[]> {
+  const query = new URLSearchParams({ from, to });
+  return requestJson<Entry[]>(`/api/entries?${query.toString()}`);
+}
+
+/** Upserts one day's value for one habit. */
+export function putEntry(habitId: number, date: string, value: number): Promise<Entry> {
+  const body: PutEntryRequest = { value };
+  return sendJson<Entry>("PUT", `/api/entries/${habitId}/${date}`, body, { keepalive: true });
 }
