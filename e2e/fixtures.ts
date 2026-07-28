@@ -45,6 +45,44 @@ export const loginError = (page: Page) => page.getByRole("alert");
 export const dashboardHeading = (page: Page) => page.getByRole("heading", { name: "ダッシュボード" });
 export const logoutButton = (page: Page) => page.getByRole("button", { name: "ログアウト" });
 
+/**
+ * The today panel once its fetch has answered, whichever way it went: the list,
+ * the "no habits yet" line, or the failure message.
+ *
+ * Deliberately a *positive* locator. Waiting for the loading placeholder to
+ * disappear would be satisfied by a page that has not rendered anything yet.
+ */
+const todayPanelSettled = (page: Page) =>
+  page
+    .getByRole("list", { name: "習慣一覧" })
+    .or(page.getByText("習慣がまだ登録されていません。"))
+    .or(page.getByText("習慣を読み込めませんでした"));
+
+/** The statistics panel, same three outcomes. */
+const statsPanelSettled = (page: Page) =>
+  page
+    .getByRole("list", { name: "習慣の統計" })
+    .or(page.getByText("習慣を登録すると"))
+    .or(page.getByText("統計を読み込めませんでした"));
+
+/**
+ * Waits until the dashboard has finished its initial loads.
+ *
+ * The heading renders immediately, but the habit list only exists once
+ * `GET /api/habits` has answered (`TodayPanel` renders the `<ul>` under
+ * `status === "ready" && habits.length > 0`). Anything that reads the list
+ * without retrying — `locator.count()` — sees 0 in that gap, and any assertion
+ * about *absence* passes vacuously in it.
+ *
+ * Call this after a navigation whenever the next step counts rows or asserts
+ * that something is not there. `loginAs` already calls it.
+ */
+export async function expectDashboardReady(page: Page): Promise<void> {
+  await expect(dashboardHeading(page)).toBeVisible();
+  await expect(todayPanelSettled(page)).toBeVisible();
+  await expect(statsPanelSettled(page)).toBeVisible();
+}
+
 export type Credentials = { username: string; password: string };
 
 /**
@@ -59,17 +97,23 @@ export async function submitLogin(page: Page, credentials: Credentials = CREDENT
 }
 
 /**
- * Opens `/` and signs in, leaving the page on the dashboard.
+ * Opens `/` and signs in, leaving the page on a dashboard whose panels have
+ * finished loading.
  *
  * Phase 3 onwards should call this (or use the `loggedInPage` fixture) rather
  * than re-implementing the flow: when the login screen changes, it changes here
  * once.
+ *
+ * Waiting only for the heading — as this used to — hands the spec a page whose
+ * habit list has not been fetched yet. That is not a slow machine's problem: the
+ * heading and the list come from two different responses, so the gap is always
+ * there and only its width varies.
  */
 export async function loginAs(page: Page, credentials: Credentials = CREDENTIALS): Promise<void> {
   await page.goto("/");
   await expect(loginHeading(page)).toBeVisible();
   await submitLogin(page, credentials);
-  await expect(dashboardHeading(page)).toBeVisible();
+  await expectDashboardReady(page);
 }
 
 type Fixtures = {

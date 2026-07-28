@@ -9,6 +9,7 @@ import type {
   LogoutResponse,
   MeResponse,
   PutEntryRequest,
+  StatsResponse,
   UpdateHabitRequest,
 } from "../../shared/types.ts";
 
@@ -51,11 +52,19 @@ type RequestOptions = {
 };
 
 async function requestJson<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
+  // Built through `Headers` and merged *after* `...init`, because spreading the
+  // init last used to overwrite this object wholesale: every request with a body
+  // (login, POST, PATCH, PUT) sets `Content-Type` and silently lost the default
+  // `Accept`. Headers also normalises the array/Headers forms of HeadersInit,
+  // which a plain object spread would quietly turn into `{}`.
+  const headers = new Headers({ Accept: "application/json" });
+  new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
+
   const response = await fetch(path, {
     credentials: "same-origin",
-    headers: { Accept: "application/json", ...init?.headers },
     keepalive: options?.keepalive ?? false,
     ...init,
+    headers,
   });
 
   if (!response.ok) {
@@ -141,4 +150,16 @@ export function getEntries(from: string, to: string): Promise<Entry[]> {
 export function putEntry(habitId: number, date: string, value: number): Promise<Entry> {
   const body: PutEntryRequest = { value };
   return sendJson<Entry>("PUT", `/api/entries/${habitId}/${date}`, body, { keepalive: true });
+}
+
+/**
+ * Streaks and the 30 day achievement rate, as of `today` (`YYYY-MM-DD`).
+ *
+ * The day is a required parameter, not something the server works out: an
+ * unfinished today is treated differently from a missed one, so which day it is
+ * has to come from the browser that knows.
+ */
+export function getStats(today: string): Promise<StatsResponse> {
+  const query = new URLSearchParams({ today });
+  return requestJson<StatsResponse>(`/api/stats?${query.toString()}`);
 }

@@ -3,7 +3,9 @@ import { toISODate } from "../../../shared/domain.ts";
 import type { CreateHabitRequest, Habit, SessionUser, UpdateHabitRequest } from "../../../shared/types.ts";
 import { ApiError, logout } from "../api.ts";
 import { useHabits } from "../hooks/useHabits.ts";
+import { useStats } from "../hooks/useStats.ts";
 import { HabitForm } from "./HabitForm.tsx";
+import { StatsPanel } from "./StatsPanel.tsx";
 import { TodayPanel } from "./TodayPanel.tsx";
 
 type DashboardProps = {
@@ -23,6 +25,23 @@ type DashboardProps = {
 export function Dashboard({ user, onLoggedOut }: DashboardProps) {
   const [today] = useState(() => toISODate(new Date()));
   const { habits, values, status, error, createHabit, updateHabit, deleteHabit, setValue } = useHabits(today);
+  const stats = useStats(today);
+
+  /**
+   * Every streak and rate is a function of the records, so any write invalidates
+   * them. Refreshing here — after the write the component already awaits — keeps
+   * the panel honest without each component having to know about the other.
+   *
+   * The reload is deliberately not allowed to fail the write it follows: the tick
+   * did land, and the panel shows its own error if the numbers cannot be fetched.
+   */
+  async function refreshStats(): Promise<void> {
+    try {
+      await stats.reload();
+    } catch {
+      // useStats already turned this into visible state.
+    }
+  }
 
   /** The habit currently open in the form, or null while creating a new one. */
   const [editing, setEditing] = useState<Habit | null>(null);
@@ -45,7 +64,9 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
     setActionError(null);
     // Errors are deliberately not caught here — the form shows them next to the
     // fields the user just filled in.
-    return await createHabit(input);
+    const created = await createHabit(input);
+    await refreshStats();
+    return created;
   }
 
   async function handleUpdate(id: number, patch: UpdateHabitRequest): Promise<Habit> {
@@ -53,6 +74,8 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
     const updated = await updateHabit(id, patch);
     // Only leave edit mode once the change actually landed.
     setEditing(null);
+    // A new target changes which past days count as achieved.
+    await refreshStats();
     return updated;
   }
 
@@ -61,9 +84,16 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
     try {
       await deleteHabit(habit.id);
       if (editing?.id === habit.id) setEditing(null);
+      await refreshStats();
     } catch (cause) {
       setActionError(cause instanceof ApiError ? cause.message : "習慣を削除できませんでした");
     }
+  }
+
+  /** Records the day's value, then re-asks for the streaks it just changed. */
+  async function handleSetValue(habitId: number, value: number): Promise<void> {
+    await setValue(habitId, value);
+    await refreshStats();
   }
 
   return (
@@ -93,9 +123,17 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
         values={values}
         status={status}
         error={error}
-        onSetValue={setValue}
+        onSetValue={handleSetValue}
         onEdit={setEditing}
         onDelete={handleDelete}
+      />
+
+      <StatsPanel
+        today={today}
+        habits={habits}
+        byHabit={stats.byHabit}
+        status={stats.status}
+        error={stats.error}
       />
 
       <HabitForm

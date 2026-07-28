@@ -5,6 +5,7 @@ import { createAuthRoutes } from "./routes/auth.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { createEntriesRoutes } from "./routes/entries.ts";
 import { createHabitsRoutes } from "./routes/habits.ts";
+import { createStatsRoutes } from "./routes/stats.ts";
 import { createClientStaticHandler } from "./static.ts";
 
 export type AppOptions = {
@@ -21,6 +22,7 @@ export function createApp(options: AppOptions): Hono {
   app.route("/api", createAuthRoutes(options.db));
   app.route("/api/habits", createHabitsRoutes(options.db));
   app.route("/api/entries", createEntriesRoutes(options.db));
+  app.route("/api/stats", createStatsRoutes(options.db));
 
   // Unknown API paths answer with JSON, never with the SPA's index.html —
   // a fetch() that silently receives HTML is painful to debug.

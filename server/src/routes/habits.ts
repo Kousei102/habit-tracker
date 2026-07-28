@@ -72,7 +72,8 @@ export function findHabit(db: DatabaseSync, userId: number, habitId: number): Ha
   return row === undefined ? null : toHabit(row);
 }
 
-function listHabits(db: DatabaseSync, userId: number): Habit[] {
+/** This user's active habits, in display order. Shared with the stats route. */
+export function listHabits(db: DatabaseSync, userId: number): Habit[] {
   const rows = db
     .prepare(
       `SELECT ${HABIT_COLUMNS} FROM habits

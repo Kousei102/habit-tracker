@@ -1,7 +1,7 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Locator, Page } from "@playwright/test";
-import { TODAY, expect, test } from "../fixtures.ts";
+import { TODAY, expect, expectDashboardReady, test } from "../fixtures.ts";
 import { E2E_DB_PATH } from "../playwright.config.ts";
 
 // Phase 3 acceptance criteria under test here:
@@ -193,15 +193,31 @@ test.describe("Phase 3 — habits and today's record", () => {
   });
 
   test("AC-3.1 control: submitting an empty name adds nothing", async ({ loggedInPage: page }) => {
-    const before = await habitList(page).getByRole("listitem").count();
+    // One habit of this test's own, first. Two reasons, both about the count
+    // below meaning something:
+    //   - `locator.count()` does not retry, and the panel renders no <ul> until
+    //     GET /api/habits has answered, so a count taken in that gap reads 0;
+    //   - if the expected count is 0, the assertion after the reload is
+    //     satisfied by the loading state and proves nothing.
+    // Creating a row makes the number non-zero and independent of which tests
+    // ran before this one. `createBooleanHabit` waits for the row, so the list
+    // is on screen by the time it returns.
+    await createBooleanHabit(page, "空欄チェックの基準");
+
+    const rows = habitList(page).getByRole("listitem");
+    const before = await rows.count();
+    expect(before).toBeGreaterThan(0);
 
     await nameField(page).fill("   ");
     await addButton(page).click();
 
     await expect(page.getByRole("alert")).toBeVisible();
     await page.reload();
+    // The list is back on screen before it is counted again — otherwise this
+    // compares a loaded page with an unloaded one.
+    await expectDashboardReady(page);
     // A blank row appearing here would mean the form reports success it did not earn.
-    await expect(habitList(page).getByRole("listitem")).toHaveCount(before);
+    await expect(rows).toHaveCount(before);
   });
 
   test("AC-3.2: a numeric habit shows result and goal together", async ({ loggedInPage: page }) => {
@@ -353,6 +369,9 @@ test.describe("Phase 3 — habits and today's record", () => {
     await expect(habitRow(page, name)).toHaveCount(0);
 
     await page.reload();
+    // "Not in the list" has to be read from a loaded list; during the fetch every
+    // row is absent, this one included.
+    await expectDashboardReady(page);
     await expect(habitRow(page, name)).toHaveCount(0);
 
     // Logical delete: the history the heatmap will need must survive.

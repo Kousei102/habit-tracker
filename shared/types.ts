@@ -108,3 +108,34 @@ export type PutEntryRequest = {
 export type DeleteHabitResponse = {
   ok: boolean;
 };
+
+/**
+ * Streaks and achievement rate for one habit, as of a given day.
+ *
+ * The "given day" is always the `today` the client sent — see `StatsResponse`.
+ * Both counts are in whole days.
+ */
+export type HabitStats = {
+  habit_id: number;
+  /**
+   * Days achieved in an unbroken run ending today **or yesterday**: a day that
+   * is not over yet must not reset the count (docs/design.md).
+   */
+  current_streak: number;
+  /** Longest unbroken run ever recorded, up to and including today. */
+  longest_streak: number;
+  /** Achieved days inside the rate window. */
+  achieved_days: number;
+  /** Length of the rate window in days — today plus the 29 days before it. */
+  window_days: number;
+  /** `achieved_days / window_days`, between 0 and 1. */
+  achievement_rate: number;
+};
+
+/** Response body of `GET /api/stats?today=YYYY-MM-DD`. */
+export type StatsResponse = {
+  /** Echo of the requested day, so the client can tell a stale answer apart. */
+  today: string;
+  /** One entry per active habit, in the same order as `GET /api/habits`. */
+  stats: HabitStats[];
+};
