@@ -13,8 +13,12 @@ SQLite 1 ファイルで動く、個人用の習慣トラッカー。
 
 ```bash
 npm install
-cp .env.example .env   # 既定値のままでも動く
+cp .env.example .env     # ADMIN_USER / ADMIN_PASSWORD は自分の値に書き換える
+npm run seed-user        # .env の資格情報でユーザーを作成（既にいればパスワード更新）
 ```
+
+ユーザー登録画面はありません。ログインできるユーザーは `npm run seed-user` が作ります。
+パスワードは scrypt でハッシュ化して保存され、平文は DB に残りません。
 
 ## 開発
 
@@ -48,3 +52,8 @@ npm run e2e       # Playwright E2E（本番ビルドに対して実行）
 | --- | --- | --- |
 | `PORT` | `3001` | API サーバーの待ち受けポート |
 | `DB_PATH` | `data/habits.db` | SQLite ファイルのパス（相対はカレントディレクトリ基準） |
+| `ADMIN_USER` | （必須） | `npm run seed-user` が作成するユーザー名 |
+| `ADMIN_PASSWORD` | （必須） | 同上のパスワード。ハッシュ化して保存される |
+
+`npm run dev` / `npm start` / `npm run seed-user` は `.env` があれば読み込みます
+（`node --env-file-if-exists`）。実行時の環境変数のほうが `.env` より優先されます。

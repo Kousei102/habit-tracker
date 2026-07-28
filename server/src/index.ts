@@ -7,7 +7,7 @@ import { getSchemaVersion } from "./migrations.ts";
 const db = openDb(DB_PATH);
 console.log(`[server] database ${DB_PATH} (schema v${getSchemaVersion(db)})`);
 
-const app = createApp({ clientDist: CLIENT_DIST });
+const app = createApp({ db, clientDist: CLIENT_DIST });
 
 const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`[server] listening on http://localhost:${info.port}`);

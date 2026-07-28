@@ -29,9 +29,12 @@ const ROLES = {
       "package.json",
       "package-lock.json",
       "tsconfig.base.json",
+      // Neither agent gets to move the goalposts: a reviewer that can edit the
+      // acceptance criteria can make any implementation pass.
+      "docs/phases.md",
     ],
     reason:
-      "reviewer は製品コードを変更できません。見つけた不具合は判定ファイルのブロッキング指摘として" +
+      "reviewer は製品コードと受け入れ基準を変更できません。見つけた不具合は判定ファイルのブロッキング指摘として" +
       "「どのファイルの何行目が、どういう入力で、どう壊れるか」まで書いて報告してください。修正は builder が行います。",
   },
 };

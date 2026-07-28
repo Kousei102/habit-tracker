@@ -17,7 +17,6 @@ export const E2E_PASSWORD = "e2e-password";
 export default defineConfig({
   testDir: "./specs",
   outputDir: path.join(repoRoot, ".harness/tmp/test-results"),
-  globalSetup: "./global-setup.ts",
 
   fullyParallel: false, // one SQLite file, one server: parallel specs would race
   workers: 1,
@@ -43,7 +42,9 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 
   webServer: {
-    command: "npm run e2e:serve",
+    // The database is wiped and seeded *in this command*, before the server can
+    // open it. Doing it from globalSetup is too late — see e2e/prepare-db.ts.
+    command: "node --disable-warning=ExperimentalWarning e2e/prepare-db.ts && npm run e2e:serve",
     cwd: repoRoot,
     url: `${BASE_URL}/api/health`,
     // Never reuse a dev server: it would run against the developer's own database.

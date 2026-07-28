@@ -11,5 +11,15 @@
     "jsx": "react-jsx",
     "types": ["node", "vite/client"]
   },
-  "include": ["shared/**/*.ts", "server/**/*.ts", "client/src/**/*.ts", "client/src/**/*.tsx", "client/vite.config.ts"]
+  /* `e2e/**` is included so `npx tsc --noEmit` also type-checks the Playwright
+     specs. They are the executable form of the acceptance criteria; a spec that
+     does not compile is a spec that silently proves nothing. */
+  "include": [
+    "shared/**/*.ts",
+    "server/**/*.ts",
+    "client/src/**/*.ts",
+    "client/src/**/*.tsx",
+    "client/vite.config.ts",
+    "e2e/**/*.ts"
+  ]
 }

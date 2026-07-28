@@ -59,9 +59,97 @@ body {
   padding: 1rem 1.25rem;
 }
 
+.card + .card {
+  margin-top: 1rem;
+}
+
 .card__title {
   font-size: 1rem;
   margin: 0 0 0.5rem;
+}
+
+.muted {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+/* Forms */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 22rem;
+}
+
+.form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.form__field label {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.form__field input {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  width: 100%;
+}
+
+.form__error {
+  margin: 0;
+  color: var(--error);
+  font-weight: 600;
+}
+
+.button {
+  font: inherit;
+  font-weight: 600;
+  color: var(--bg);
+  background: var(--text);
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.button--quiet {
+  color: var(--text);
+  background: transparent;
+  border-color: var(--border);
+  font-weight: 500;
+}
+
+/* Dashboard */
+
+.dashboard__header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.dashboard__header .card__title {
+  margin: 0;
+}
+
+.dashboard__user {
+  margin: 0.5rem 0 0;
+  color: var(--text-muted);
 }
 
 .health-status {

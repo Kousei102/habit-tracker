@@ -3,8 +3,9 @@ import { describe, it } from "node:test";
 import type { HealthResponse } from "../../shared/types.ts";
 import { createApp } from "./app.ts";
 import { CLIENT_DIST } from "./config.ts";
+import { openDb } from "./db.ts";
 
-const app = createApp({ clientDist: CLIENT_DIST });
+const app = createApp({ db: openDb(":memory:"), clientDist: CLIENT_DIST });
 
 describe("GET /api/health", () => {
   it("returns 200 with {\"ok\":true}", async () => {
