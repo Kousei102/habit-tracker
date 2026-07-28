@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+
+# Development database (SQLite + WAL sidecars)
+data/
+
+# Harness scratch: e2e database, Playwright reports, traces
+.harness/tmp/
+test-results/
+
+# .harness/guard.mjs and .harness/reviews/ are committed on purpose:
+# the guard is harness code, and the reviews are the record of how each phase passed.

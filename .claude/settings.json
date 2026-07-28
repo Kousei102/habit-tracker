@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(npm test:*)",
+      "Bash(npm ci:*)",
+      "Bash(npm install:*)",
+      "Bash(npm view:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx playwright test:*)",
+      "Bash(npx playwright show-report:*)",
+      "Bash(npx playwright --version)",
+      "Bash(node --test:*)",
+      "Bash(node --disable-warning=ExperimentalWarning:*)",
+      "Bash(node .harness/guard.mjs:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(curl -s http://localhost:*)",
+      "Bash(curl -i http://localhost:*)",
+      "Bash(curl -sI http://localhost:*)"
+    ]
+  }
+}

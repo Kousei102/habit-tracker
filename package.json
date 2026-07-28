@@ -1,0 +1,17 @@
+{
+  "name": "habit-tracker",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "e2e": "playwright test --config e2e/playwright.config.ts",
+    "e2e:report": "playwright show-report .harness/tmp/playwright-report",
+    "harness:smoke": "playwright test --config .harness/smoke/smoke.config.ts",
+    "e2e:serve": "npm run build --workspace client && node --disable-warning=ExperimentalWarning server/src/index.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.0"
+  }
+}
