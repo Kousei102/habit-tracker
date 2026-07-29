@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { toISODate } from "../../../shared/domain.ts";
+import { heatmapStart } from "../../../shared/heatmap.ts";
 import type { CreateHabitRequest, Habit, SessionUser, UpdateHabitRequest } from "../../../shared/types.ts";
 import { ApiError, logout } from "../api.ts";
+import { useEntryHistory } from "../hooks/useEntryHistory.ts";
 import { useHabits } from "../hooks/useHabits.ts";
 import { useStats } from "../hooks/useStats.ts";
 import { HabitForm } from "./HabitForm.tsx";
+import { HeatmapPanel } from "./HeatmapPanel.tsx";
 import { StatsPanel } from "./StatsPanel.tsx";
 import { TodayPanel } from "./TodayPanel.tsx";
 
@@ -26,6 +29,11 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
   const [today] = useState(() => toISODate(new Date()));
   const { habits, values, status, error, createHabit, updateHabit, deleteHabit, setValue } = useHabits(today);
   const stats = useStats(today);
+  // The heatmap's window is decided here too, from the same "today": the server
+  // is told both ends as strings and never works out a range of its own.
+  // (A plain const: `today` never changes within a session and the bound is a
+  // string, so the hook's dependencies stay stable across renders.)
+  const history = useEntryHistory(heatmapStart(today), today);
 
   /**
    * Every streak and rate is a function of the records, so any write invalidates
@@ -92,7 +100,10 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
 
   /** Records the day's value, then re-asks for the streaks it just changed. */
   async function handleSetValue(habitId: number, value: number): Promise<void> {
-    await setValue(habitId, value);
+    const entry = await setValue(habitId, value);
+    // The heatmap holds a year of records; the one that just changed is handed
+    // to it directly rather than re-read, so a write costs one request, not two.
+    history.applyEntry(entry);
     await refreshStats();
   }
 
@@ -134,6 +145,14 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
         byHabit={stats.byHabit}
         status={stats.status}
         error={stats.error}
+      />
+
+      <HeatmapPanel
+        today={today}
+        habits={habits}
+        entries={history.entries}
+        status={history.status}
+        error={history.error}
       />
 
       <HabitForm

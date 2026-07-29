@@ -74,6 +74,17 @@ export function TodayPanel({
   );
 }
 
+/**
+ * How long a numeric field waits after the last keystroke before saving.
+ *
+ * Typing "120" used to be three `PUT /api/entries` calls and three
+ * `GET /api/stats` — and each of those stats calls reads every entry the user
+ * has. Now it is one of each. Short enough that the save still feels immediate;
+ * the pending value is on screen the whole time, and blur, or the page going
+ * away, flushes it early so nothing typed can be lost.
+ */
+const SAVE_DEBOUNCE_MS = 300;
+
 type HabitRowProps = {
   habit: Habit;
   /** Today's stored value. No record for today reads as 0. */
@@ -116,17 +127,69 @@ function HabitRow({ habit, value, onSetValue, onEdit, onDelete }: HabitRowProps)
       setDraft(formatValue(value));
       setRowError(cause instanceof ApiError ? cause.message : "記録を保存できませんでした");
     } finally {
-      setPendingValue(null);
+      // Unless newer typing is already waiting to be written: dropping back to
+      // the stored value between two saves would make the row flicker through a
+      // state the user has already moved past.
+      if (queued.current === null) setPendingValue(null);
       setSaving(false);
     }
   }
+
+  /** The value waiting for the debounce to expire, and the timer holding it. */
+  const queued = useRef<number | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Writes whatever is queued, now. Safe to call when nothing is queued. */
+  function flush(): void {
+    if (timer.current !== null) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+
+    const next = queued.current;
+    queued.current = null;
+    if (next === null) return;
+
+    void save(next);
+  }
+
+  // `flush` closes over this render's `save`; the listeners below are installed
+  // once, so they reach it through a ref rather than a stale copy.
+  const flushRef = useRef(flush);
+  useEffect(() => {
+    flushRef.current = flush;
+  });
+
+  useEffect(() => {
+    // The worst case is typing and reloading straight away: the debounce has
+    // not expired, and the row is about to be destroyed. `pagehide` fires
+    // before that happens, and the write itself is `keepalive` (api.ts), so the
+    // request outlives the document instead of being cancelled with it — which
+    // is what keeps AC-3.4 ("the value survives a reload") true.
+    const onHide = () => flushRef.current();
+    window.addEventListener("pagehide", onHide);
+
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      if (timer.current !== null) clearTimeout(timer.current);
+    };
+  }, []);
 
   function handleNumberChange(text: string): void {
     setDraft(text);
     if (text.trim() === "") return; // a cleared box is mid-edit, not a value of 0
     const parsed = Number(text);
     if (!Number.isFinite(parsed) || parsed < 0) return;
-    void save(parsed);
+
+    // Shown immediately, written once the typing stops: 達成 / 未達成 and the
+    // "3 / 5 km" line follow the keystroke, the request does not.
+    queued.current = parsed;
+    setPendingValue(parsed);
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      flushRef.current();
+    }, SAVE_DEBOUNCE_MS);
   }
 
   const controlId = `habit-${habit.id}-value`;
@@ -164,6 +227,8 @@ function HabitRow({ habit, value, onSetValue, onEdit, onDelete }: HabitRowProps)
               value={draft}
               onChange={(event) => handleNumberChange(event.target.value)}
               onBlur={() => {
+                // Leaving the field ends the edit: no reason to keep waiting.
+                flush();
                 if (draft.trim() === "") setDraft(formatValue(value));
               }}
             />

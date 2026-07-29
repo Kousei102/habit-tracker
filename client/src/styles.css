@@ -15,6 +15,22 @@
   --meter-fill: #2f6fdb;
   --meter-track: #dde6f7;
 
+  /* Heatmap: a sequential ramp — one hue (blue), four steps light→dark for
+     magnitude, plus a neutral step for "no record". Validated with the dataviz
+     validator against this mode's plot surface (--bg): monotone lightness,
+     every adjacent gap >= 0.06 L, light end 2.50:1 vs the surface.
+
+     --heat-0 is deliberately *not* the bottom of the blue ramp: "nothing was
+     recorded" is a different kind of statement from "a little was done", and
+     AC-5.6 asks the two to be separable. Measured apart from --heat-1 by
+     ΔE 23.4 (OKLab×100) here and 20.2 in dark mode — both far above the 15
+     floor, under normal vision and under simulated protanopia/deuteranopia. */
+  --heat-0: #e2e6ea;
+  --heat-1: #6da7ec;
+  --heat-2: #2a78d6;
+  --heat-3: #1c5cab;
+  --heat-4: #0d366b;
+
   font-family:
     system-ui,
     -apple-system,
@@ -40,6 +56,16 @@
        dark surface rather than inverted. */
     --meter-fill: #7ba7ee;
     --meter-track: #2a3a52;
+
+    /* Same treatment for the ramp: these are four *other* steps of the same
+       blue, picked and validated against the dark plot surface (light end
+       2.71:1 vs --bg). An inverted copy of the light ramp would put its faint
+       end below the surface and lose the first step entirely. */
+    --heat-0: #2e343b;
+    --heat-1: #1c5cab;
+    --heat-2: #2a78d6;
+    --heat-3: #5598e7;
+    --heat-4: #9ec5f4;
   }
 }
 
@@ -372,6 +398,154 @@ body {
 .meter__fill {
   height: 100%;
   background: var(--meter-fill);
+}
+
+/* Year heatmap */
+
+.heatmap__header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.heatmap__header .card__title {
+  margin: 0;
+}
+
+.heatmap__picker {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  /* Without this a long habit name in the <select> can push the card wider than
+     the viewport, which is exactly the page-level scroll AC-5.5 forbids. */
+  min-width: 0;
+  max-width: 100%;
+}
+
+.heatmap__picker label {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.heatmap__picker select {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  max-width: 100%;
+}
+
+.heatmap__range {
+  margin: 0.25rem 0 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The one element allowed to scroll sideways. The page itself must not (AC-5.5),
+   so the overflow is contained here rather than left to the body. */
+.heatmap__scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem;
+}
+
+.heatmap__svg {
+  display: block;
+}
+
+/* Cells are separated by a 2px gap in the surface colour, never by a stroke:
+   ink that is not data. */
+.heatmap__cell,
+.heatmap__swatch {
+  fill: var(--heat-0);
+  background: var(--heat-0);
+}
+
+.heatmap__cell[data-level="1"],
+.heatmap__swatch[data-level="1"] {
+  fill: var(--heat-1);
+  background: var(--heat-1);
+}
+
+.heatmap__cell[data-level="2"],
+.heatmap__swatch[data-level="2"] {
+  fill: var(--heat-2);
+  background: var(--heat-2);
+}
+
+.heatmap__cell[data-level="3"],
+.heatmap__swatch[data-level="3"] {
+  fill: var(--heat-3);
+  background: var(--heat-3);
+}
+
+.heatmap__cell[data-level="4"],
+.heatmap__swatch[data-level="4"] {
+  fill: var(--heat-4);
+  background: var(--heat-4);
+}
+
+.heatmap__axis text {
+  fill: var(--text-muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.heatmap__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 1rem;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.heatmap__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* The legend sits on the card, one step further from the plot surface than the
+   cells do, so the "no record" key needs a hairline to stay findable. The cells
+   themselves never get one — a stroke around a mark is ink that is not data. */
+.heatmap__swatch {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  flex: none;
+}
+
+.heatmap__legend-note {
+  flex-basis: 100%;
+}
+
+/* position: fixed keeps the tooltip out of the document's scrollable area, so a
+   cell near the right edge cannot widen the page. */
+.heatmap__tip {
+  position: fixed;
+  z-index: 10;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.375rem;
+  white-space: nowrap;
 }
 
 /* Habit form */

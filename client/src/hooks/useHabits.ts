@@ -28,8 +28,14 @@ export type UseHabits = {
   createHabit: (input: CreateHabitRequest) => Promise<Habit>;
   updateHabit: (id: number, patch: UpdateHabitRequest) => Promise<Habit>;
   deleteHabit: (id: number) => Promise<void>;
-  /** Upserts today's value and folds the server's answer back into `values`. */
-  setValue: (habitId: number, value: number) => Promise<void>;
+  /**
+   * Upserts today's value and folds the server's answer back into `values`.
+   *
+   * Returns that answer so the caller can hand it to anything else holding
+   * records — the heatmap's cached year, in particular, which would otherwise
+   * have to re-read every entry after each keystroke.
+   */
+  setValue: (habitId: number, value: number) => Promise<Entry>;
 };
 
 function messageOf(cause: unknown): string {
@@ -107,12 +113,12 @@ export function useHabits(today: string): UseHabits {
   );
 
   const setValue = useCallback(
-    async (habitId: number, value: number): Promise<void> => {
+    async (habitId: number, value: number): Promise<Entry> => {
       // The stored value comes back from the server, so what the screen shows as
       // saved is what was actually written — not what we hoped to write.
       const entry = await api.putEntry(habitId, today, value);
-      if (!mounted.current) return;
-      setValues((current) => ({ ...current, [entry.habit_id]: entry.value }));
+      if (mounted.current) setValues((current) => ({ ...current, [entry.habit_id]: entry.value }));
+      return entry;
     },
     [today],
   );
