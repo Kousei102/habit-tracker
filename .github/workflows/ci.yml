@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# A second push supersedes a run that is still going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 22.18+ is required: the server runs TypeScript through Node's type
+          # stripping, and node:sqlite has to work without a flag.
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      # Only chromium — the E2E suite pins the browser clock and asserts on
+      # computed colours, so it targets one engine on purpose.
+      - run: npx playwright install --with-deps chromium
+
+      # Builds the client and serves it from the Node server, so this exercises
+      # the production path rather than the Vite dev server.
+      - run: npm run e2e
+
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: .harness/tmp/playwright-report
+          retention-days: 7

@@ -1,0 +1,23 @@
+# Keep the build context small and keep host state out of the image.
+.git
+.gitignore
+node_modules
+**/node_modules
+
+# Built on the host; the image builds its own.
+client/dist
+
+# Host state that must never end up baked into an image.
+data
+.env
+
+# Test and harness material: the image runs the app, it does not verify it.
+e2e
+.harness
+test-results
+.claude
+docs
+README.md
+Dockerfile
+.dockerignore
+fly.toml

@@ -16,6 +16,7 @@
     "build": "npm run build --workspace client",
     "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env server/src/index.ts",
     "seed-user": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env server/scripts/seed-user.ts",
+    "backup": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env server/scripts/backup.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p server/tsconfig.json && tsc --noEmit -p client/tsconfig.json",
     "test": "node --disable-warning=ExperimentalWarning --test \"server/src/**/*.test.ts\" \"shared/**/*.test.ts\" \"client/src/**/*.test.ts\"",
     "e2e": "playwright test --config e2e/playwright.config.ts",

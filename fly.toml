@@ -1,0 +1,50 @@
+# Fly.io deployment. Setup steps: README.md「デプロイ（Fly.io）」.
+#
+# ⚠ This app must run on exactly ONE machine.
+# All state lives in a single SQLite file on the volume mounted below, and on
+# Fly every machine gets its OWN volume. A second machine would therefore serve
+# a second, empty database, and each request would land on whichever one the
+# proxy happened to pick — habits appearing and disappearing at random, with no
+# error anywhere. Never `fly scale count 2`; scale the machine up, not out.
+
+# Globally unique across all of Fly. Change this if `fly deploy` reports the
+# name is taken.
+app = "habit-tracker"
+primary_region = "nrt"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  # Absolute, so it resolves to the volume regardless of the working directory.
+  DB_PATH = "/data/habits.db"
+  # COOKIE_SECURE is deliberately left unset (= "auto"). force_https below makes
+  # the proxy send X-Forwarded-Proto: https, which is exactly what the server
+  # reads to decide the Secure flag.
+
+[[mounts]]
+  source = "habit_data"
+  destination = "/data"
+  initial_size = "1gb"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_start_machines = true
+  # A personal tracker is idle almost all day. Stopping the machine when nobody
+  # is using it costs a second or two of cold start on the next visit; SIGTERM
+  # closes the database first, so stopping is safe.
+  auto_stop_machines = "stop"
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/api/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
