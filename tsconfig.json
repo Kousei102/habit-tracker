@@ -18,6 +18,7 @@
     "client/src/**/*.ts",
     "client/src/**/*.tsx",
     "client/vite.config.ts",
+    "scripts/**/*.ts",
     "e2e/**/*.ts"
   ]
 }

@@ -182,7 +182,15 @@ function readV1(fields: Record<string, unknown>): AppData | null {
   return { version: SCHEMA_VERSION, next_habit_id: next, habits, entries };
 }
 
-function readHabit(candidate: unknown): Habit | null {
+/**
+ * One habit, validated and normalised, or `null` when the value cannot be one.
+ *
+ * Exported so that `backup.ts` reads an imported habit through exactly the same
+ * rules as a stored one. A second, slightly different validator for the import
+ * path would be a way to get a habit into storage that the store itself would
+ * later declare unreadable.
+ */
+export function readHabit(candidate: unknown): Habit | null {
   if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) return null;
   const fields = candidate as Record<string, unknown>;
 

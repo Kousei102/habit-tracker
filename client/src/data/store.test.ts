@@ -225,3 +225,153 @@ describe("logical delete through the store (AC-7.7)", () => {
     assert.equal(store.getStats("2026-03-15")[0]?.longest_streak, 1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Recovery (AC-8.12).
+//
+// These three are the only operations that do not read the document first, and
+// that is exactly what makes them usable when it cannot be read. On an iPhone
+// there is no devtools and no way to clear one site's storage, so if these did
+// not work from inside a broken app, a broken app would be a dead one.
+// ---------------------------------------------------------------------------
+
+describe("recovery from an unreadable document (AC-8.12)", () => {
+  const BROKEN = "{ this is not json";
+
+  it("reports the problem through `probe` without throwing", () => {
+    store.setStorageBackend(memoryStorage(BROKEN));
+
+    const result = store.probe();
+    assert.equal(result.ok, false);
+    assert.ok(result.ok === false && result.message.trim() !== "");
+  });
+
+  it("says nothing is wrong when nothing is", () => {
+    store.setStorageBackend(memoryStorage());
+    store.createHabit({ name: "散歩", kind: "boolean" });
+
+    assert.deepEqual(store.probe(), { ok: true });
+  });
+
+  it("probing does not write — the broken bytes stay exactly as they were", () => {
+    const backend = memoryStorage(BROKEN);
+    store.setStorageBackend(backend);
+
+    store.probe();
+    store.probe();
+
+    assert.equal(backend.raw(), BROKEN);
+  });
+
+  it("hands back the raw bytes so they can be rescued to a file", () => {
+    store.setStorageBackend(memoryStorage(BROKEN));
+    assert.equal(store.readRawDocument(), BROKEN);
+  });
+
+  it("replaces an unreadable document with an imported one", () => {
+    const backend = memoryStorage(BROKEN);
+    store.setStorageBackend(backend);
+
+    // Ordinary writes are still refused…
+    assert.throws(() => store.createHabit({ name: "散歩", kind: "boolean" }), DataError);
+
+    // …but an import, which the user explicitly confirmed, goes through.
+    store.replaceAll({
+      version: SCHEMA_VERSION,
+      next_habit_id: 2,
+      habits: [
+        {
+          id: 1,
+          name: "復元した習慣",
+          kind: "boolean",
+          target: null,
+          unit: null,
+          color: "blue",
+          sort_order: 0,
+          archived_at: null,
+          created_at: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      entries: { "1": { "2026-03-14": 1 } },
+    });
+
+    assert.deepEqual(store.probe(), { ok: true });
+    assert.deepEqual(store.getHabits().map((habit) => habit.name), ["復元した習慣"]);
+    assert.equal(store.getEntries("2026-03-14", "2026-03-14").length, 1);
+    // And the app can be used again straight afterwards.
+    assert.doesNotThrow(() => store.createHabit({ name: "新しい習慣", kind: "boolean" }));
+  });
+
+  it("resets an unreadable document to an empty one", () => {
+    const backend = memoryStorage(BROKEN);
+    store.setStorageBackend(backend);
+
+    store.resetAll();
+
+    assert.deepEqual(store.probe(), { ok: true });
+    assert.deepEqual(store.getHabits(true), []);
+    // An empty *document*, not an absent key: a version the app understands.
+    const stored = JSON.parse(backend.raw() ?? "null") as { version: number };
+    assert.equal(stored.version, SCHEMA_VERSION);
+
+    assert.doesNotThrow(() => store.createHabit({ name: "やり直し", kind: "boolean" }));
+  });
+
+  it("reports a reset that could not be written instead of pretending", () => {
+    store.setStorageBackend(fullStorage(BROKEN));
+    assert.throws(() => store.resetAll(), DataError);
+  });
+});
+
+describe("the last export date (AC-8.9)", () => {
+  it("is absent until there has been one", () => {
+    store.setStorageBackend(memoryStorage());
+    assert.equal(store.getLastExportDate(), null);
+  });
+
+  it("round-trips the day it was told", () => {
+    store.setStorageBackend(memoryStorage());
+    store.setLastExportDate("2026-03-15");
+    assert.equal(store.getLastExportDate(), "2026-03-15");
+  });
+
+  it("lives outside the document, so it survives an unreadable one", () => {
+    const backend = memoryStorage("{ this is not json");
+    store.setStorageBackend(backend);
+
+    store.setLastExportDate("2026-03-15");
+
+    assert.equal(store.getLastExportDate(), "2026-03-15");
+    // …and writing it did not touch the document being protected.
+    assert.equal(backend.raw(), "{ this is not json");
+  });
+
+  it("ignores a stored value that is not a date", () => {
+    const backend = memoryStorage();
+    backend.setItem("habit-tracker.last-export", "きのう");
+    store.setStorageBackend(backend);
+
+    assert.equal(store.getLastExportDate(), null);
+  });
+
+  it("refuses to record a day that is not a day", () => {
+    const backend = memoryStorage();
+    store.setStorageBackend(backend);
+
+    store.setLastExportDate("2026-13-40");
+    assert.equal(store.getLastExportDate(), null);
+  });
+
+  it("does not fail the export when it cannot be recorded", () => {
+    // The file has already reached the user by then. Failing the whole export
+    // over a note about it would be the tail wagging the dog.
+    store.setStorageBackend({
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("nope");
+      },
+    });
+
+    assert.doesNotThrow(() => store.setLastExportDate("2026-03-15"));
+  });
+});

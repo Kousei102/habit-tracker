@@ -623,3 +623,153 @@ body {
   display: flex;
   gap: 0.5rem;
 }
+
+/* Backup and recovery
+ *
+ * Nothing here may scroll sideways or reach past the viewport at 375px
+ * (AC-8.11): the whole panel is a single column, every row of buttons wraps, and
+ * the file input is the one element with a natural width of its own — hence the
+ * explicit max-width. */
+
+.backup__subtitle {
+  font-size: 0.9375rem;
+  margin: 1.25rem 0 0.5rem;
+}
+
+.backup__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+}
+
+/* `.button` is `align-self: flex-start`, which in a wrapping row would stretch
+   nothing; kept explicit so a button never grows to the full width. */
+.backup__actions .button {
+  align-self: flex-start;
+}
+
+.backup__file {
+  font: inherit;
+  color: var(--text);
+  max-width: 100%;
+}
+
+.backup__reminder {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--meter-fill);
+  border-radius: 0.5rem;
+  background: var(--bg);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.backup__notice {
+  margin: 0.75rem 0 0;
+  color: var(--ok);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.backup__preview {
+  margin: 0.75rem 0 0;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg);
+}
+
+.backup__preview-title {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+/* A definition list rather than a sentence: "習慣 3 件 / 記録 120 件 / 期間 …"
+   has to be readable at a glance before something irreversible happens. */
+.backup__facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.backup__facts dt {
+  color: var(--text-muted);
+}
+
+.backup__facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.backup__warn {
+  margin: 0.75rem 0 0;
+  color: var(--error);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.backup__danger {
+  margin: 0.5rem 0 0;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--error);
+  border-radius: 0.5rem;
+  background: var(--bg);
+}
+
+.backup__ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.backup__ack input {
+  width: 1.125rem;
+  height: 1.125rem;
+  margin: 0.125rem 0 0;
+  flex: none;
+}
+
+/* The one destructive button in the app. It is disabled until the box above is
+   ticked, so its enabled state is always the result of a deliberate act. */
+.button--danger {
+  color: var(--bg);
+  background: var(--error);
+}
+
+.button--danger:disabled {
+  cursor: not-allowed;
+}
+
+/* Shown when the saved document cannot be read. The point of the border is that
+   this block is the only thing on the page that can still do anything. */
+.recovery {
+  margin: 0 0 0.75rem;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--error);
+  border-radius: 0.5rem;
+  background: var(--bg);
+}
+
+.recovery__title {
+  margin: 0;
+  font-weight: 700;
+  color: var(--error);
+}
+
+.recovery__detail {
+  margin: 0.5rem 0 0;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.recovery .button {
+  margin-top: 0.75rem;
+}

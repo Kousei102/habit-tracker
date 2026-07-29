@@ -2,8 +2,27 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>習慣トラッカー</title>
+    <meta name="description" content="端末の中だけで動く習慣トラッカー。記録はこのブラウザに保存されます。" />
+
+    <!-- Installability (AC-8.1). The manifest is served from public/ as-is and
+         uses relative URLs, so it keeps working if the app is ever hosted under
+         a subdirectory. -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <meta name="theme-color" content="#2a78d6" />
+
+    <!-- iOS (AC-8.2). Safari on iOS deletes localStorage after seven days of not
+         visiting a site — but a web app *added to the home screen* keeps its own
+         counter and is not expected to be cleared. That exemption is the reason
+         these four lines exist: they are what makes "add to home screen" produce
+         a standalone app rather than a bookmark. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="習慣トラッカー" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <link rel="icon" href="./icons/icon-192.png" type="image/png" sizes="192x192" />
   </head>
   <body>
     <div id="root"></div>

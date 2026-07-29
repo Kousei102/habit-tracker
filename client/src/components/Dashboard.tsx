@@ -6,6 +6,7 @@ import { useEntryHistory } from "../hooks/useEntryHistory.ts";
 import { useHabits } from "../hooks/useHabits.ts";
 import { useStats } from "../hooks/useStats.ts";
 import { useToday } from "../hooks/useToday.ts";
+import { BackupPanel } from "./BackupPanel.tsx";
 import { HabitForm } from "./HabitForm.tsx";
 import { HeatmapPanel } from "./HeatmapPanel.tsx";
 import { StatsPanel } from "./StatsPanel.tsx";
@@ -30,6 +31,7 @@ export function Dashboard() {
     values,
     status,
     error,
+    reload,
     createHabit,
     updateHabit,
     deleteHabit,
@@ -130,6 +132,38 @@ export function Dashboard() {
     refreshStats();
   }
 
+  /**
+   * After an import or a reset the stored document is a different document, so
+   * every panel re-reads from scratch. The transient UI goes too: an "undo the
+   * delete" offer that refers to a habit from the *previous* document would
+   * either fail or, worse, resurrect something into the restored data.
+   */
+  function handleDataReplaced(): void {
+    setActionError(null);
+    setUndoable(null);
+    setEditing(null);
+    reload();
+    history.reload();
+    refreshStats();
+  }
+
+  /**
+   * The stored document could not be read at all (a corrupt document, or a
+   * browser refusing storage). The backup panel moves to the top in that state:
+   * it is the only thing on screen that can still do anything, and AC-8.12 is
+   * explicit that "broken means bricked" is not acceptable on a phone with no
+   * devtools.
+   */
+  const broken = status === "error";
+  const backupPanel = (
+    <BackupPanel
+      today={today}
+      broken={broken}
+      brokenMessage={error}
+      onDataReplaced={handleDataReplaced}
+    />
+  );
+
   return (
     <>
       <section className="card" aria-labelledby="dashboard-heading">
@@ -170,6 +204,8 @@ export function Dashboard() {
         )}
       </section>
 
+      {broken && backupPanel}
+
       <TodayPanel
         today={today}
         habits={habits}
@@ -197,6 +233,8 @@ export function Dashboard() {
         status={history.status}
         error={history.error}
       />
+
+      {!broken && backupPanel}
 
       <HabitForm
         habit={editing}

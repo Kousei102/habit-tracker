@@ -1,3 +1,4 @@
+import { isISODate } from "../../../shared/domain.ts";
 import type {
   CreateHabitInput,
   Entry,
@@ -5,7 +6,7 @@ import type {
   HabitStats,
   UpdateHabitInput,
 } from "../../../shared/types.ts";
-import { isQuotaExceeded, quotaError, unavailableError } from "../errors.ts";
+import { DataError, describeError, isQuotaExceeded, quotaError, unavailableError } from "../errors.ts";
 import type { AppData } from "./document.ts";
 import * as doc from "./document.ts";
 import { STORAGE_KEY } from "./document.ts";
@@ -26,9 +27,12 @@ import { STORAGE_KEY } from "./document.ts";
 
 /**
  * The slice of `Storage` this module uses — two methods, so a test can supply an
- * object literal. Nothing here ever *removes* the key: the app has no "delete
- * everything" action, and until Phase 8 adds an export there is nothing to
- * restore from if it did.
+ * object literal.
+ *
+ * Still no `removeItem`. Phase 8 added a reset (AC-8.12), but it writes an empty
+ * *document* rather than deleting the key: an app whose storage holds
+ * `{"version":1,…}` is in a state it understands, whereas an absent key and a
+ * key that failed to be deleted look identical afterwards.
  */
 export type StorageLike = {
   getItem(key: string): string | null;
@@ -205,4 +209,106 @@ export function putEntry(habitId: number, date: string, value: number): Entry {
   const { data, entry } = doc.putEntry(load(), habitId, date, value);
   save(data);
   return entry;
+}
+
+// ---------------------------------------------------------------------------
+// Backup and recovery (Phase 8)
+//
+// The three operations below are the only ones in the app that do **not** start
+// by reading the document, and that is the point: they are what a user reaches
+// for when the document cannot be read at all (AC-8.12). On an iPhone there is
+// no devtools and no practical way to clear one site's localStorage, so an app
+// that can only be repaired from outside the app is an app that is gone.
+// ---------------------------------------------------------------------------
+
+/**
+ * True when the stored document can be read.
+ *
+ * A probe rather than a `try { load() }` at every call site, and — importantly —
+ * it writes nothing: the corrupt state must leave the bytes exactly as they are
+ * (AC-7.6), including while the recovery UI is on screen.
+ */
+export function probe(): { ok: true } | { ok: false; message: string } {
+  try {
+    load();
+    return { ok: true };
+  } catch (cause) {
+    if (cause instanceof DataError) return { ok: false, message: cause.message };
+    return { ok: false, message: describeError(cause, "データを読み込めませんでした") };
+  }
+}
+
+/**
+ * The stored bytes, exactly as they are, or null.
+ *
+ * Only used to let the user download an unreadable document before resetting it.
+ * A reset that destroys the one copy of data we merely failed to *parse* would
+ * be the same data loss the whole phase exists to prevent — a later version of
+ * this app, or a person with a text editor, may well get it back.
+ */
+export function readRawDocument(): string | null {
+  try {
+    return storage().getItem(STORAGE_KEY);
+  } catch (cause) {
+    console.error("[store] could not read from localStorage:", cause);
+    throw unavailableError();
+  }
+}
+
+/**
+ * Replaces the whole document — the write half of an import.
+ *
+ * Does not read first, so it works on top of an unreadable document. It is the
+ * one operation allowed to overwrite bytes it never understood, because the user
+ * explicitly asked for it after being shown what they are replacing (AC-8.7).
+ */
+export function replaceAll(data: AppData): void {
+  save(data);
+}
+
+/** Back to an empty document. Same reasoning as `replaceAll`, minus the file. */
+export function resetAll(): void {
+  save(doc.emptyData());
+}
+
+// ---------------------------------------------------------------------------
+// When the last export was taken (AC-8.9)
+// ---------------------------------------------------------------------------
+
+/**
+ * Its own key, not a field in the document, for three reasons: it must stay
+ * readable when the document is not, it is a fact about *this device's* backups
+ * rather than about the data (importing a file must not tell you that you
+ * recently exported), and putting it in the document would make every export a
+ * write to the very thing being exported.
+ */
+const LAST_EXPORT_KEY = "habit-tracker.last-export";
+
+/** `YYYY-MM-DD` of the last export on this device, or null if there was none. */
+export function getLastExportDate(): string | null {
+  let text: string | null;
+  try {
+    text = storage().getItem(LAST_EXPORT_KEY);
+  } catch {
+    // Not worth an error message of its own: this is a nicety, and the export
+    // button beside it works either way.
+    return null;
+  }
+  return isISODate(text) ? text : null;
+}
+
+/**
+ * Records that an export happened today.
+ *
+ * Best effort on purpose. The file has already been handed to the user by the
+ * time this runs, and failing the export because we could not write a note about
+ * it would be the tail wagging the dog.
+ */
+export function setLastExportDate(today: string): void {
+  if (!isISODate(today)) return;
+  try {
+    storage().setItem(LAST_EXPORT_KEY, today);
+  } catch (cause) {
+    console.error("[store] could not record the export date:", cause);
+  }
 }
