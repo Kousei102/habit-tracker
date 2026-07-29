@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { addDays } from "./domain.ts";
 import {
   HEATMAP_COLUMNS,
   HEATMAP_DAYS,
@@ -9,6 +10,7 @@ import {
   habitLevel,
   heatmapStart,
   indexEntries,
+  monthMarks,
   monthOf,
   overallCellLabel,
   overallLevel,
@@ -186,6 +188,76 @@ describe("overallLevel", () => {
   });
 });
 
+describe("monthMarks", () => {
+  /** The real grid a year ends on `today` with. */
+  function marksFor(today: string): Array<{ column: number; month: number }> {
+    return monthMarks(buildHeatmapGrid(today));
+  }
+
+  it("labels every month boundary in the window", () => {
+    // A year of daily windows: whichever day the grid ends on, no month may go
+    // unlabelled except the sliver the grid opens in.
+    for (let offset = 0; offset < 370; offset += 1) {
+      const today = addDays("2026-03-15", -offset);
+      const grid = buildHeatmapGrid(today);
+      const marks = marksFor(today);
+
+      // Every column where the month changes, taken independently of the code
+      // under test.
+      const boundaries: number[] = [];
+      for (let column = 1; column < grid.length; column += 1) {
+        const previous = monthOf((grid[column - 1] as string[])[0] as string);
+        const month = monthOf((grid[column] as string[])[0] as string);
+        if (month !== previous) boundaries.push(column);
+      }
+
+      const labelled = new Set(marks.map((mark) => mark.column));
+      for (const column of boundaries) {
+        assert.ok(
+          labelled.has(column),
+          `today=${today}: the month starting at column ${column} has no label (${JSON.stringify(marks)})`,
+        );
+      }
+
+      // ...and every label names the month its column actually starts in.
+      for (const mark of marks) {
+        assert.equal(mark.month, monthOf((grid[mark.column] as string[])[0] as string));
+      }
+
+      // ...and no two labels are close enough to overlap.
+      for (let index = 1; index < marks.length; index += 1) {
+        const gap = (marks[index] as { column: number }).column - (marks[index - 1] as { column: number }).column;
+        assert.ok(gap >= 3, `today=${today}: labels ${index - 1} and ${index} are ${gap} columns apart`);
+      }
+    }
+  });
+
+  it("keeps the leading label when the first month change is far enough away", () => {
+    const grid = [["2026-01-01"], ["2026-01-08"], ["2026-01-15"], ["2026-01-22"], ["2026-01-29"], ["2026-02-05"]];
+
+    assert.deepEqual(monthMarks(grid), [
+      { column: 0, month: 1 },
+      { column: 5, month: 2 },
+    ]);
+  });
+
+  it("drops the opening sliver rather than the month boundary behind it", () => {
+    // Column 0 is the tail of January; February starts one column later. Only
+    // one of the two labels fits, and it is February's — the boundary that is
+    // actually about to be true for the next five columns.
+    const grid = [["2026-01-31"], ["2026-02-07"], ["2026-02-14"], ["2026-02-21"], ["2026-02-28"], ["2026-03-07"]];
+
+    assert.deepEqual(monthMarks(grid), [
+      { column: 1, month: 2 },
+      { column: 5, month: 3 },
+    ]);
+  });
+
+  it("survives an empty grid", () => {
+    assert.deepEqual(monthMarks([]), []);
+  });
+});
+
 describe("indexEntries", () => {
   it("groups records by date and habit", () => {
     const entries: Entry[] = [
@@ -220,7 +292,33 @@ describe("cell labels", () => {
 
   it("says 記録なし for a day with nothing recorded", () => {
     assert.equal(overallCellLabel(TODAY, [check], undefined), `${TODAY} 記録なし`);
+    assert.equal(overallCellLabel(TODAY, [check], new Map()), `${TODAY} 記録なし`);
     assert.equal(habitCellLabel(minutes, TODAY, undefined), `${TODAY} 記録なし`);
+  });
+
+  it("says 記録なし when the day's only record belongs to a deleted habit", () => {
+    // `indexEntries` keeps every entry, archived habits included, so the map for
+    // such a day is non-empty while no *listed* habit has a value in it. The
+    // paint and the name have to agree about that, or a blank-looking cell
+    // announces "0 / 1 習慣 達成".
+    const values = new Map([[999, 1]]);
+
+    assert.equal(overallLevel([check], values), 0);
+    assert.equal(overallCellLabel(TODAY, [check], values), `${TODAY} 記録なし`);
+  });
+
+  it("counts a day that has both a listed and a deleted habit's record", () => {
+    const values = new Map([
+      [check.id, 1],
+      [999, 1],
+    ]);
+
+    assert.equal(overallCellLabel(TODAY, [check, minutes], values), `${TODAY} 1 / 2 習慣 達成`);
+  });
+
+  it("says 記録なし when there are no listed habits at all", () => {
+    assert.equal(overallLevel([], new Map([[check.id, 1]])), 0);
+    assert.equal(overallCellLabel(TODAY, [], new Map([[check.id, 1]])), `${TODAY} 記録なし`);
   });
 
   it("carries the value, the goal and the unit for a numeric habit", () => {

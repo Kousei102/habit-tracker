@@ -59,7 +59,8 @@ describe("POST /api/auth/login", () => {
     assert.match(setCookie, /HttpOnly/i);
     assert.match(setCookie, /SameSite=Lax/i);
     assert.match(setCookie, /Path=\//i);
-    // Not production in tests, so the cookie must still work over plain http.
+    // The request came in over http, so a Secure cookie would be thrown away by
+    // the browser and the session would never survive the login.
     assert.doesNotMatch(setCookie, /Secure/i);
 
     const body = (await response.json()) as MeResponse;
@@ -104,6 +105,37 @@ describe("POST /api/auth/login", () => {
       }),
     );
     assert.equal(notJson.status, 400);
+    db.close();
+  });
+
+  it("marks the cookie Secure when the request arrived over TLS", async () => {
+    const { app, db } = makeApp();
+
+    const direct = await app.fetch(
+      new Request("https://habits.example.com/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: USERNAME, password: PASSWORD }),
+      }),
+    );
+    assert.match(direct.headers.get("set-cookie") ?? "", /;\s*Secure/i);
+
+    // ...and behind a TLS-terminating proxy, where the URL says http and only
+    // the forwarded header knows the truth.
+    const proxied = await app.fetch(
+      new Request("http://10.0.0.5:3001/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-proto": "https" },
+        body: JSON.stringify({ username: USERNAME, password: PASSWORD }),
+      }),
+    );
+    assert.match(proxied.headers.get("set-cookie") ?? "", /;\s*Secure/i);
+
+    // The flag follows the connection, not the build: a production process
+    // reached over plain http still issues a cookie the browser will keep.
+    const plain = await app.fetch(post("/api/auth/login", { username: USERNAME, password: PASSWORD }));
+    assert.doesNotMatch(plain.headers.get("set-cookie") ?? "", /Secure/i);
+
     db.close();
   });
 });

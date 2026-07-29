@@ -85,6 +85,27 @@ export function listHabits(db: DatabaseSync, userId: number): Habit[] {
   return rows.map(toHabit);
 }
 
+/**
+ * The same list, plus the archived rows.
+ *
+ * Only one caller wants these: the heatmap, which draws a year of history that
+ * logical deletion deliberately keeps. Without a way to read the names back, a
+ * deleted habit's records are in the database but unreachable from the screen —
+ * which is the opposite of what archiving is for. Active habits still come
+ * first, so a caller that just wants "the list" can slice on `archived_at`.
+ */
+export function listHabitsWithArchived(db: DatabaseSync, userId: number): Habit[] {
+  const rows = db
+    .prepare(
+      `SELECT ${HABIT_COLUMNS} FROM habits
+        WHERE user_id = ?
+        ORDER BY (archived_at IS NOT NULL), sort_order, id`,
+    )
+    .all(userId) as unknown as HabitRow[];
+
+  return rows.map(toHabit);
+}
+
 // ---------------------------------------------------------------------------
 // Validation
 //
@@ -114,6 +135,19 @@ function parseTarget(raw: unknown): Valid<number> {
   if (raw <= 0) return invalid("目標値は 0 より大きい値にしてください");
   if (raw > MAX_TARGET) return invalid(`目標値は ${MAX_TARGET} 以下にしてください`);
   return { ok: true, value: raw };
+}
+
+/**
+ * A target that may also be absent.
+ *
+ * `null` is a value, not a missing field: it means "no goal". Routing it through
+ * `parseTarget` (which only accepts numbers) is what used to make
+ * `{"target": null}` a 400 — leaving a numeric habit with a goal no request
+ * could ever remove.
+ */
+function parseOptionalTarget(raw: unknown): Valid<number | null> {
+  if (raw === undefined || raw === null || raw === "") return { ok: true, value: null };
+  return parseTarget(raw);
 }
 
 function parseUnit(raw: unknown): Valid<string | null> {
@@ -166,7 +200,10 @@ function parseCreate(body: unknown, fallbackColor: string): Valid<NewHabit> {
     return { ok: true, value: { name: name.value, kind, target: null, unit: null, color: color.value } };
   }
 
-  const target = parseTarget(fields["target"]);
+  // A numeric habit may have no goal at all: `isAchieved()` then reads it as
+  // "did anything count" (docs/design.md §2), which is the right answer for
+  // "minutes practised" when the user does not want to commit to a number.
+  const target = parseOptionalTarget(fields["target"]);
   if (!target.ok) return target;
 
   const unit = parseUnit(fields["unit"]);
@@ -211,9 +248,12 @@ function parseUpdate(body: unknown, current: Habit): Valid<HabitPatch> {
     return { ok: true, value: { name, target: null, unit: null, color: color.value } };
   }
 
+  // An *absent* `target` keeps the stored goal; an explicit `null` clears it.
+  // The two have to be told apart here, because the client sends the second one
+  // to mean "no goal any more" and there is no other way to say it.
   let target = current.target;
   if (fields["target"] !== undefined) {
-    const parsed = parseTarget(fields["target"]);
+    const parsed = parseOptionalTarget(fields["target"]);
     if (!parsed.ok) return parsed;
     target = parsed.value;
   }
@@ -245,9 +285,18 @@ export function createHabitsRoutes(db: DatabaseSync): Hono<AuthEnv> {
   // end up outside the auth boundary by accident (AC-2.2).
   routes.use("*", requireAuth(db));
 
-  /** The active habits of the signed-in user, in display order. */
+  /**
+   * The active habits of the signed-in user, in display order.
+   *
+   * `?include_archived=1` adds the deleted ones, which is what the heatmap needs
+   * to put a name on the history archiving keeps. The default is unchanged, so
+   * "the list" still means "the habits the user has".
+   */
   routes.get("/", (c) => {
-    return c.json(listHabits(db, c.get("user").id));
+    const userId = c.get("user").id;
+    const includeArchived = c.req.query("include_archived") === "1";
+
+    return c.json(includeArchived ? listHabitsWithArchived(db, userId) : listHabits(db, userId));
   });
 
   routes.post("/", async (c) => {
@@ -354,6 +403,32 @@ export function createHabitsRoutes(db: DatabaseSync): Hono<AuthEnv> {
 
     const body: DeleteHabitResponse = { ok: true };
     return c.json(body);
+  });
+
+  /**
+   * Undo of the above: clear `archived_at` and the habit is listed again.
+   *
+   * Deleting is one click with no confirmation, which is only defensible if the
+   * click can be taken back — and until now nothing could, even though the row
+   * and its entries were still sitting there. `archived_at IS NOT NULL` makes
+   * restoring something that was never deleted a 404 rather than a no-op that
+   * reports success.
+   */
+  routes.post("/:id/restore", (c) => {
+    const userId = c.get("user").id;
+    const id = parseId(c.req.param("id"));
+    if (id === null) return c.json(NOT_FOUND, 404);
+
+    const result = db
+      .prepare("UPDATE habits SET archived_at = NULL WHERE id = ? AND user_id = ? AND archived_at IS NOT NULL")
+      .run(id, userId);
+
+    if (result.changes === 0) return c.json(NOT_FOUND, 404);
+
+    const restored = findHabit(db, userId, id);
+    if (restored === null) return c.json(NOT_FOUND, 404);
+
+    return c.json(restored);
   });
 
   return routes;

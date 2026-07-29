@@ -2,7 +2,6 @@ import type {
   CreateHabitRequest,
   DeleteHabitResponse,
   Entry,
-  ErrorResponse,
   Habit,
   HealthResponse,
   LoginRequest,
@@ -12,16 +11,15 @@ import type {
   StatsResponse,
   UpdateHabitRequest,
 } from "../../shared/types.ts";
+import { ApiError, NETWORK_ERROR, fallbackMessage, messageFromBody } from "./errors.ts";
 
-export class ApiError extends Error {
-  status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-  }
-}
+/**
+ * Every failure leaves this module as an `ApiError` carrying a readable Japanese
+ * message (AC-6.4): a rejected fetch, a 500 with an HTML body from a proxy and a
+ * 404 with a JSON body all arrive at the UI in the same shape, so no component
+ * has to guess how to word one.
+ */
+export { ApiError };
 
 /**
  * Called whenever the API answers 401. The session can die at any moment (it
@@ -60,30 +58,46 @@ async function requestJson<T>(path: string, init?: RequestInit, options?: Reques
   const headers = new Headers({ Accept: "application/json" });
   new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
 
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    keepalive: options?.keepalive ?? false,
-    ...init,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      credentials: "same-origin",
+      keepalive: options?.keepalive ?? false,
+      ...init,
+      headers,
+    });
+  } catch (cause) {
+    // The server is down, the machine is offline, the request was cut off. There
+    // is no status and no body — but the screen still has to say something, and
+    // "TypeError: Failed to fetch" is not it.
+    console.error(`[client] ${path} could not be reached:`, cause);
+    throw new ApiError(NETWORK_ERROR, fallbackMessage(NETWORK_ERROR));
+  }
 
   if (!response.ok) {
-    let message = `${response.status} ${response.statusText}`;
+    let body: unknown = null;
     try {
-      const body = (await response.json()) as ErrorResponse;
-      if (typeof body.error === "string" && body.error !== "") message = body.error;
+      body = await response.json();
     } catch {
-      // Non-JSON error body: keep the status line as the message.
+      // A non-JSON error body (a proxy's HTML page, an empty 502) carries
+      // nothing worth showing; the status does.
     }
 
     if (response.status === 401 && options?.notifyUnauthorized !== false) {
       unauthorizedHandler?.();
     }
 
-    throw new ApiError(response.status, message);
+    throw new ApiError(response.status, messageFromBody(body) ?? fallbackMessage(response.status));
   }
 
-  return (await response.json()) as T;
+  try {
+    return (await response.json()) as T;
+  } catch {
+    // A 200 that is not the JSON we asked for — the SPA fallback answering an
+    // API path, say. Silently treating it as data is how a screen ends up
+    // rendering nothing with no explanation.
+    throw new ApiError(response.status, "サーバーの応答を読み取れませんでした");
+  }
 }
 
 function sendJson<T>(method: string, path: string, body: unknown, options?: RequestOptions): Promise<T> {
@@ -119,9 +133,15 @@ export function getMe(): Promise<MeResponse> {
   return requestJson<MeResponse>("/api/auth/me");
 }
 
-/** The active (non-archived) habits of the signed-in user, in display order. */
-export function getHabits(): Promise<Habit[]> {
-  return requestJson<Habit[]>("/api/habits");
+/**
+ * The habits of the signed-in user, in display order.
+ *
+ * `includeArchived` additionally returns the deleted ones (active first). The
+ * heatmap asks for them: their entries are kept on purpose, and without their
+ * names that history would be undrawable.
+ */
+export function getHabits(includeArchived: boolean = false): Promise<Habit[]> {
+  return requestJson<Habit[]>(includeArchived ? "/api/habits?include_archived=1" : "/api/habits");
 }
 
 export function createHabit(input: CreateHabitRequest): Promise<Habit> {
@@ -135,6 +155,11 @@ export function updateHabit(id: number, patch: UpdateHabitRequest): Promise<Habi
 /** Archives the habit. Its entries are kept — this is a logical delete. */
 export function deleteHabit(id: number): Promise<DeleteHabitResponse> {
   return requestJson<DeleteHabitResponse>(`/api/habits/${id}`, { method: "DELETE" });
+}
+
+/** Undo of the above: the habit is listed again, with the records it kept. */
+export function restoreHabit(id: number): Promise<Habit> {
+  return postJson<Habit>(`/api/habits/${id}/restore`, {});
 }
 
 /**

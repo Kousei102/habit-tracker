@@ -17,7 +17,7 @@
     "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env server/src/index.ts",
     "seed-user": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env server/scripts/seed-user.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p server/tsconfig.json && tsc --noEmit -p client/tsconfig.json",
-    "test": "node --disable-warning=ExperimentalWarning --test \"server/src/**/*.test.ts\" \"shared/**/*.test.ts\"",
+    "test": "node --disable-warning=ExperimentalWarning --test \"server/src/**/*.test.ts\" \"shared/**/*.test.ts\" \"client/src/**/*.test.ts\"",
     "e2e": "playwright test --config e2e/playwright.config.ts",
     "e2e:report": "playwright show-report .harness/tmp/playwright-report",
     "harness:smoke": "playwright test --config .harness/smoke/smoke.config.ts",

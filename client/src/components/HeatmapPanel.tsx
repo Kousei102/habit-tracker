@@ -6,7 +6,7 @@ import {
   habitCellLabel,
   habitLevel,
   indexEntries,
-  monthOf,
+  monthMarks,
   overallCellLabel,
   overallLevel,
   weekdayName,
@@ -55,6 +55,8 @@ type HeatmapPanelProps = {
   today: string;
   /** Active habits, in list order. The denominator of the overall view. */
   habits: Habit[];
+  /** Deleted habits. Not part of the overall view — only of their own map. */
+  archivedHabits: Habit[];
   /** A year of records, as loaded by `useEntryHistory`. */
   entries: Entry[];
   status: EntryHistoryStatus;
@@ -67,25 +69,67 @@ type Cell = {
   label: string;
 };
 
-export function HeatmapPanel({ today, habits, entries, status, error }: HeatmapPanelProps) {
-  /** `null` = the overall view; otherwise the id of the habit being shown. */
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+/** One entry in the picker: the overall view, or one habit's own map. */
+type Choice = {
+  /** The `<option value>`; "all" for the overall view, otherwise the habit id. */
+  key: string;
+  label: string;
+  /** null for the overall view. */
+  habit: Habit | null;
+};
 
-  // A habit can be deleted while its map is on screen; fall back to the overall
-  // view rather than drawing a grid for something that is no longer listed.
-  const selected = selectedId === null ? null : (habits.find((habit) => habit.id === selectedId) ?? null);
+const OVERALL_KEY = "all";
+const OVERALL_LABEL = "全体";
+
+export function HeatmapPanel({ today, habits, archivedHabits, entries, status, error }: HeatmapPanelProps) {
+  const [selectedKey, setSelectedKey] = useState<string>(OVERALL_KEY);
 
   const grid = useMemo(() => buildHeatmapGrid(today), [today]);
   const index = useMemo(() => indexEntries(entries), [entries]);
 
+  /**
+   * What can be shown.
+   *
+   * A deleted habit whose records are inside the window is offered too. Deletion
+   * is logical precisely so the year does not grow a hole (docs/design.md §4),
+   * and until now the panel disagreed: with every habit deleted it drew nothing
+   * at all, however much history was sitting in the database. Deleted habits
+   * without a record in the window are left out — an empty grid under a name is
+   * not worth a line in the menu.
+   *
+   * The overall view is offered only while there is at least one active habit,
+   * because its shade is "achieved out of the habits you keep": with none left,
+   * every day would honestly read 記録なし, which is a blank grid pretending to
+   * be an answer.
+   */
+  const choices = useMemo<Choice[]>(() => {
+    const list: Choice[] = [];
+    if (habits.length > 0) list.push({ key: OVERALL_KEY, label: OVERALL_LABEL, habit: null });
+
+    for (const habit of habits) list.push({ key: String(habit.id), label: habit.name, habit });
+
+    const recorded = new Set(entries.map((entry) => entry.habit_id));
+    for (const habit of archivedHabits) {
+      if (!recorded.has(habit.id)) continue;
+      // Named as deleted, so the picker never claims a habit still exists.
+      list.push({ key: String(habit.id), label: `${habit.name}（削除済み）`, habit });
+    }
+
+    return list;
+  }, [habits, archivedHabits, entries]);
+
+  // The selection can stop existing under the user — deleting the habit whose
+  // map is on screen, or losing the overall view with the last active habit — so
+  // it is resolved against the current choices rather than trusted.
+  const selected = choices.find((choice) => choice.key === selectedKey) ?? choices[0];
+  const shown = selected?.habit ?? null;
+
   const cells = useMemo<Cell[][]>(() => {
-    // Only listed (non-archived) habits count towards the overall view: an
-    // archived habit's entries are kept, but it is not part of "today" any more.
     return grid.map((column) =>
       column.map((date) => {
         const values = index.get(date);
 
-        if (selected === null) {
+        if (shown === null) {
           return {
             date,
             level: overallLevel(habits, values),
@@ -93,18 +137,18 @@ export function HeatmapPanel({ today, habits, entries, status, error }: HeatmapP
           };
         }
 
-        const value = values?.get(selected.id);
+        const value = values?.get(shown.id);
         return {
           date,
-          level: habitLevel(selected, value),
-          label: habitCellLabel(selected, date, value),
+          level: habitLevel(shown, value),
+          label: habitCellLabel(shown, date, value),
         };
       }),
     );
-  }, [grid, index, habits, selected]);
+  }, [grid, index, habits, shown]);
 
   const firstDay = grid[0]?.[0] ?? today;
-  const subject = selected === null ? "全体" : selected.name;
+  const subject = selected?.label ?? OVERALL_LABEL;
 
   return (
     <section className="card" aria-labelledby="heatmap-heading">
@@ -113,25 +157,28 @@ export function HeatmapPanel({ today, habits, entries, status, error }: HeatmapP
           年間ヒートマップ
         </h2>
 
-        <div className="heatmap__picker">
-          <label htmlFor="heatmap-target">表示する習慣</label>
-          <select
-            id="heatmap-target"
-            data-testid="heatmap-target"
-            value={selectedId === null ? "all" : String(selectedId)}
-            onChange={(event) => {
-              const raw = event.target.value;
-              setSelectedId(raw === "all" ? null : Number(raw));
-            }}
-          >
-            <option value="all">全体</option>
-            {habits.map((habit) => (
-              <option key={habit.id} value={String(habit.id)}>
-                {habit.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        {choices.length > 0 && (
+          <div className="heatmap__picker">
+            <label htmlFor="heatmap-target">表示する習慣</label>
+            <select
+              id="heatmap-target"
+              data-testid="heatmap-target"
+              // The control is narrower than a long habit name (styles.css), so
+              // the full text has to stay available somewhere a pointer can
+              // reach it. The accessible name is unaffected: that comes from the
+              // <label>, and a title never overrides one.
+              title={selected?.label ?? OVERALL_LABEL}
+              value={selected?.key ?? OVERALL_KEY}
+              onChange={(event) => setSelectedKey(event.target.value)}
+            >
+              {choices.map((choice) => (
+                <option key={choice.key} value={choice.key} title={choice.label}>
+                  {choice.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       <p className="heatmap__range" data-testid="heatmap-range">
@@ -150,11 +197,9 @@ export function HeatmapPanel({ today, habits, entries, status, error }: HeatmapP
       {/* Worded so it shares no leading phrase with the other panels' empty
           states: they are addressed by their text, and two paragraphs starting
           the same way are one ambiguous locator. */}
-      {status === "ready" && habits.length === 0 && (
-        <p className="muted">まだ表示できる記録がありません。</p>
-      )}
+      {status === "ready" && choices.length === 0 && <p className="muted">まだ表示できる記録がありません。</p>}
 
-      {status === "ready" && habits.length > 0 && (
+      {status === "ready" && selected !== undefined && (
         <>
           <HeatmapGrid subject={subject} firstDay={firstDay} today={today} grid={grid} cells={cells} />
           <Legend subject={subject} />
@@ -182,19 +227,11 @@ type HeatmapGridProps = {
 function HeatmapGrid({ subject, firstDay, today, grid, cells }: HeatmapGridProps) {
   const [hovered, setHovered] = useState<{ x: number; y: number; text: string } | null>(null);
 
-  const months = useMemo(() => {
-    const marks: Array<{ column: number; month: number }> = [];
-    for (let column = 0; column < grid.length; column += 1) {
-      const month = monthOf(grid[column]?.[0] ?? "");
-      const previous = marks[marks.length - 1];
-      // One label per month, and never within two columns of the last one —
-      // at 13px per column the text would otherwise overlap.
-      if (previous === undefined || (previous.month !== month && column - previous.column >= 3)) {
-        marks.push({ column, month });
-      }
-    }
-    return marks;
-  }, [grid]);
+  // One label per month, at the column the month starts in, thinned out so two
+  // of them cannot overlap at 13px per column. The rule for *which* one to drop
+  // lives in shared/heatmap.ts, where node:test can check that no month is ever
+  // left unlabelled.
+  const months = useMemo(() => monthMarks(grid), [grid]);
 
   /**
    * The 371 rects, built once per data change.
@@ -219,7 +256,6 @@ function HeatmapGrid({ subject, firstDay, today, grid, cells }: HeatmapGridProps
                 aria-label={cell.label}
                 data-date={cell.date}
                 data-level={cell.level}
-                data-label={cell.label}
                 x={GUTTER_X + columnIndex * STEP}
                 y={GUTTER_Y + row * STEP}
                 width={CELL}
@@ -233,9 +269,19 @@ function HeatmapGrid({ subject, firstDay, today, grid, cells }: HeatmapGridProps
     [cells, grid, today],
   );
 
+  /**
+   * The tooltip says exactly what the cell announces.
+   *
+   * Read from `aria-label` rather than from a `data-label` copy of it: two
+   * attributes holding the same sentence is two places to fix when the wording
+   * changes, and the one that gets forgotten is the one nobody can see.
+   */
   function showTip(event: { target: unknown; clientX: number; clientY: number }): void {
     const element = event.target as Element | null;
-    const text = element?.getAttribute?.("data-label") ?? null;
+    // Only a cell has something to say. The `<svg>` and the row groups carry
+    // accessible names of their own, and the pointer passes over both.
+    const isCell = element?.getAttribute?.("role") === "gridcell";
+    const text = isCell ? (element?.getAttribute("aria-label") ?? null) : null;
     if (text === null) {
       setHovered(null);
       return;

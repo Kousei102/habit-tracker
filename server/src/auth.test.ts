@@ -9,6 +9,7 @@ import {
   deleteSessionsForUser,
   findSessionUser,
   hashPassword,
+  isSecureRequest,
   verifyPassword,
 } from "./auth.ts";
 
@@ -130,5 +131,43 @@ describe("sessions", () => {
     );
     assert.equal(findSessionUser(db, stale.token), null);
     db.close();
+  });
+});
+
+describe("isSecureRequest — what decides the Secure flag", () => {
+  it("is false for plain http, whatever the host", () => {
+    // The case that used to break authentication: a production build reached
+    // over http on a LAN address or a docker hostname. A Secure cookie here is
+    // silently dropped by the browser and every later request is a 401.
+    assert.equal(isSecureRequest("http://localhost:3101/api/auth/login"), false);
+    assert.equal(isSecureRequest("http://192.168.1.20:3001/api/auth/login"), false);
+    assert.equal(isSecureRequest("http://habits.internal/api/auth/login"), false);
+  });
+
+  it("is true for https", () => {
+    assert.equal(isSecureRequest("https://habits.example.com/api/auth/login"), true);
+  });
+
+  it("follows X-Forwarded-Proto when a proxy terminated TLS", () => {
+    // The request reaches this process as http; only the header knows better.
+    assert.equal(isSecureRequest("http://127.0.0.1:3001/api/auth/login", "https"), true);
+    assert.equal(isSecureRequest("http://127.0.0.1:3001/api/auth/login", "HTTPS"), true);
+    assert.equal(isSecureRequest("http://127.0.0.1:3001/api/auth/login", " https "), true);
+  });
+
+  it("reads only the client-facing hop of a forwarded chain", () => {
+    assert.equal(isSecureRequest("http://127.0.0.1:3001/x", "https, http"), true);
+    assert.equal(isSecureRequest("https://127.0.0.1:3001/x", "http, https"), false);
+  });
+
+  it("falls back to the URL when the header is absent or meaningless", () => {
+    assert.equal(isSecureRequest("https://example.com/x", undefined), true);
+    assert.equal(isSecureRequest("https://example.com/x", ""), true);
+    assert.equal(isSecureRequest("https://example.com/x", "gopher"), true);
+    assert.equal(isSecureRequest("http://example.com/x", "gopher"), false);
+  });
+
+  it("does not throw on a malformed URL", () => {
+    assert.equal(isSecureRequest("not a url"), false);
   });
 });

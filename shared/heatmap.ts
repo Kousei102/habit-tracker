@@ -80,6 +80,46 @@ export function monthOf(date: string): number {
   return Number(date.slice(5, 7));
 }
 
+/** A month label to draw above a column of the grid. */
+export type MonthMark = {
+  /** Index into the grid's columns. */
+  column: number;
+  /** 1–12. */
+  month: number;
+};
+
+/**
+ * Where the month labels go: one per month, at the column the month starts in.
+ *
+ * Two labels closer than `minGap` columns would overlap at 13px per column, so
+ * one of them has to go — and *which* one matters. Deciding by looking backwards
+ * ("skip this month if the previous label is too close") drops a real month
+ * boundary and shifts the next label off the boundary it names. Deciding by
+ * looking forwards drops only a label whose successor is right behind it, and
+ * the only mark that can be in that position is the leading partial month: every
+ * other pair of boundaries is at least 28 days — four columns — apart. So no
+ * month ever loses its label; at most the sliver of month the grid opens with
+ * goes unnamed, which is the honest one to lose since it is barely on screen.
+ */
+export function monthMarks(grid: readonly (readonly string[])[], minGap: number = 3): MonthMark[] {
+  const changes: MonthMark[] = [];
+  let previousMonth = -1;
+
+  for (let column = 0; column < grid.length; column += 1) {
+    const first = grid[column]?.[0];
+    if (first === undefined || first === "") continue;
+
+    const month = monthOf(first);
+    if (month !== previousMonth) changes.push({ column, month });
+    previousMonth = month;
+  }
+
+  return changes.filter((mark, index) => {
+    const next = changes[index + 1];
+    return next === undefined || next.column - mark.column >= minGap;
+  });
+}
+
 /** Records indexed as `date → habit id → value`, which is how a cell asks. */
 export type EntryIndex = Map<string, Map<number, number>>;
 
@@ -125,16 +165,30 @@ export function habitLevel(habit: Habit, value: number | undefined): HeatLevel {
 }
 
 /**
- * Shade for the whole day: achieved habits over active habits, in four steps
- * (docs/design.md).
+ * How many of the day's habits were recorded, and how many of those count.
  *
- * `Math.ceil` over `max(1, …)` is what keeps AC-5.2 true for a day that was
- * recorded but achieved nothing: the ratio is 0, yet the day is not blank.
- * Habits that were archived are not counted — they are not part of "how much of
- * today did I do" any more, and their entries only exist for their own map.
+ * **The single source of "was anything recorded that day"**, so the shade and
+ * the accessible name can never disagree. They used to: the level walked
+ * `habits` while the label only asked whether the day's map was empty, and the
+ * map is built from *every* entry — archived habits included. A day whose only
+ * record belonged to a deleted habit was therefore painted as blank while
+ * announcing "0 / 1 習慣 達成". Both now ask this function.
+ *
+ * Archived habits are not counted: they are not part of "how much of today did
+ * I do" any more, and their entries are read through their own map instead.
  */
-export function overallLevel(habits: readonly Habit[], values: ReadonlyMap<number, number> | undefined): HeatLevel {
-  if (habits.length === 0 || values === undefined) return 0;
+export type OverallCounts = {
+  /** Habits in `habits` with a record on the day. */
+  recorded: number;
+  /** How many of those `isAchieved()` accepts. */
+  achieved: number;
+};
+
+export function overallCounts(
+  habits: readonly Habit[],
+  values: ReadonlyMap<number, number> | undefined,
+): OverallCounts {
+  if (values === undefined) return { recorded: 0, achieved: 0 };
 
   let recorded = 0;
   let achieved = 0;
@@ -146,6 +200,20 @@ export function overallLevel(habits: readonly Habit[], values: ReadonlyMap<numbe
     if (isAchieved(habit, value)) achieved += 1;
   }
 
+  return { recorded, achieved };
+}
+
+/**
+ * Shade for the whole day: achieved habits over active habits, in four steps
+ * (docs/design.md).
+ *
+ * `Math.ceil` over `max(1, …)` is what keeps AC-5.2 true for a day that was
+ * recorded but achieved nothing: the ratio is 0, yet the day is not blank.
+ */
+export function overallLevel(habits: readonly Habit[], values: ReadonlyMap<number, number> | undefined): HeatLevel {
+  if (habits.length === 0) return 0;
+
+  const { recorded, achieved } = overallCounts(habits, values);
   if (recorded === 0) return 0;
 
   const step = Math.ceil((achieved / habits.length) * 4);
@@ -154,13 +222,7 @@ export function overallLevel(habits: readonly Habit[], values: ReadonlyMap<numbe
 
 /** How many of the day's active habits were achieved — the label's numerator. */
 export function achievedCount(habits: readonly Habit[], values: ReadonlyMap<number, number> | undefined): number {
-  if (values === undefined) return 0;
-  let count = 0;
-  for (const habit of habits) {
-    const value = values.get(habit.id);
-    if (value !== undefined && isAchieved(habit, value)) count += 1;
-  }
-  return count;
+  return overallCounts(habits, values).achieved;
 }
 
 /**
@@ -168,14 +230,19 @@ export function achievedCount(habits: readonly Habit[], values: ReadonlyMap<numb
  *
  * The ISO date leads, so a reader — human or `getByRole` — always gets the day
  * before the number, and a spec can address one cell by its date alone.
+ *
+ * "Recorded" means the same thing here as it does for the paint: at least one
+ * *listed* habit has a value. A day holding nothing but a deleted habit's record
+ * is blank in both channels.
  */
 export function overallCellLabel(
   date: string,
   habits: readonly Habit[],
   values: ReadonlyMap<number, number> | undefined,
 ): string {
-  if (values === undefined || values.size === 0) return `${date} 記録なし`;
-  return `${date} ${achievedCount(habits, values)} / ${habits.length} 習慣 達成`;
+  const { recorded, achieved } = overallCounts(habits, values);
+  if (recorded === 0) return `${date} 記録なし`;
+  return `${date} ${achieved} / ${habits.length} 習慣 達成`;
 }
 
 /** The same, for a single habit: the day, what was recorded, and whether it counts. */

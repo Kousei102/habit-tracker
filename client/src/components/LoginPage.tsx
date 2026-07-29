@@ -1,13 +1,22 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import type { SessionUser } from "../../../shared/types.ts";
-import { ApiError, login } from "../api.ts";
+import { login } from "../api.ts";
+import { describeError } from "../errors.ts";
 
 type LoginPageProps = {
   onLoggedIn: (user: SessionUser) => void;
+  /**
+   * Why the app is showing this screen, when it is not simply "you are signed
+   * out" — the session check failed, say. Displayed in the same place as a login
+   * failure, and superseded by one: two live regions on one form would make the
+   * screen announce itself twice and leave a reader to work out which message is
+   * about what they just did.
+   */
+  notice?: string | null;
 };
 
-export function LoginPage({ onLoggedIn }: LoginPageProps) {
+export function LoginPage({ onLoggedIn, notice = null }: LoginPageProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -25,11 +34,16 @@ export function LoginPage({ onLoggedIn }: LoginPageProps) {
       onLoggedIn(user);
     } catch (cause) {
       // The server deliberately says nothing about which field was wrong, and
-      // neither does this screen.
-      setError(cause instanceof ApiError ? cause.message : "ログインできませんでした");
+      // neither does this screen. A server that did not answer at all is a
+      // different message, and it comes through the same path (AC-6.4).
+      setError(describeError(cause, "ログインできませんでした"));
       setPending(false);
     }
   }
+
+  // What this attempt produced wins over why the screen appeared in the first
+  // place: the newer message is the one the user is waiting for.
+  const message = error ?? notice;
 
   return (
     <section className="card" aria-labelledby="login-heading">
@@ -65,9 +79,9 @@ export function LoginPage({ onLoggedIn }: LoginPageProps) {
           />
         </div>
 
-        {error !== null && (
+        {message !== null && (
           <p className="form__error" role="alert">
-            {error}
+            {message}
           </p>
         )}
 

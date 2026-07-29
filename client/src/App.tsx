@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { HealthResponse, SessionUser } from "../../shared/types.ts";
 import { ApiError, getHealth, getMe, setUnauthorizedHandler } from "./api.ts";
+import { describeError } from "./errors.ts";
 import { Dashboard } from "./components/Dashboard.tsx";
 import { LoginPage } from "./components/LoginPage.tsx";
 
@@ -22,8 +23,22 @@ type AuthState =
 export function App() {
   const [auth, setAuth] = useState<AuthState>({ status: "checking" });
   const [health, setHealth] = useState<HealthState>({ status: "loading" });
+  /**
+   * Why the session check failed, when it failed for a reason other than "not
+   * signed in".
+   *
+   * Without it, a broken or unreachable API looks exactly like a signed-out
+   * user: the login form appears, the user types the right password, and the
+   * only clue that anything is wrong is in the console (AC-6.4).
+   */
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  const goAnonymous = useCallback(() => setAuth({ status: "anonymous" }), []);
+  const goAnonymous = useCallback(() => {
+    setAuth({ status: "anonymous" });
+    // Reaching the login screen through a 401 is the ordinary end of a session,
+    // not a fault to report.
+    setAuthError(null);
+  }, []);
 
   // Any API 401, from any screen, drops back to the login form.
   useEffect(() => {
@@ -40,11 +55,15 @@ export function App() {
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
-        // 401 is the normal "not signed in" answer. Anything else (server down)
-        // still leaves the login form as the only sensible screen; the health
-        // readout below is what tells the user the API is unreachable.
-        if (!(cause instanceof ApiError) || cause.status !== 401) {
+        // 401 is the normal "not signed in" answer and needs no explanation.
+        // Anything else (the API down, a 500) still leaves the login form as the
+        // only sensible screen — but the user is told why they are looking at
+        // it, instead of being left to conclude their password stopped working.
+        if (cause instanceof ApiError && cause.status === 401) {
+          setAuthError(null);
+        } else {
           console.error("[client] /api/auth/me failed:", cause);
+          setAuthError(describeError(cause, "ログイン状態を確認できませんでした"));
         }
         setAuth({ status: "anonymous" });
       });
@@ -61,10 +80,9 @@ export function App() {
       .then((data) => {
         if (!cancelled) setHealth({ status: "ok", data });
       })
-      .catch((error: unknown) => {
+      .catch((cause: unknown) => {
         if (cancelled) return;
-        const message = error instanceof Error ? error.message : String(error);
-        setHealth({ status: "error", message });
+        setHealth({ status: "error", message: describeError(cause, "サーバーに接続できませんでした") });
       });
 
     return () => {
@@ -78,7 +96,13 @@ export function App() {
 
       {auth.status === "checking" && <p className="muted">読み込み中…</p>}
       {auth.status === "anonymous" && (
-        <LoginPage onLoggedIn={(user) => setAuth({ status: "authenticated", user })} />
+        <LoginPage
+          notice={authError}
+          onLoggedIn={(user) => {
+            setAuthError(null);
+            setAuth({ status: "authenticated", user });
+          }}
+        />
       )}
       {auth.status === "authenticated" && <Dashboard user={auth.user} onLoggedOut={goAnonymous} />}
 

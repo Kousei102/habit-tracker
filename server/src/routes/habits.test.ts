@@ -105,15 +105,19 @@ describe("POST /api/habits", () => {
     h.db.close();
   });
 
-  it("rejects a numeric habit without a target", async () => {
+  it("accepts a numeric habit with no target, and stores it as null", async () => {
     const h = makeHarness();
 
-    const response = await h.app.fetch(
-      request("POST", "/api/habits", h.cookie, { name: "ランニング", kind: "numeric" }),
-    );
+    // "No goal" is a state the domain already has a rule for: `isAchieved()`
+    // falls back to "did anything at all" when the target is null
+    // (docs/design.md §2). Refusing to create one — which this used to do — made
+    // that rule unreachable from the product.
+    const omitted = await createHabit(h, { name: "散歩の分数", kind: "numeric", unit: "分" });
+    assert.equal(omitted.target, null);
+    assert.equal(omitted.unit, "分");
 
-    assert.equal(response.status, 400);
-    assert.equal((h.db.prepare("SELECT COUNT(*) AS n FROM habits").get() as { n: number }).n, 0);
+    const explicitNull = await createHabit(h, { name: "読書のページ数", kind: "numeric", target: null });
+    assert.equal(explicitNull.target, null);
     h.db.close();
   });
 
@@ -190,6 +194,49 @@ describe("PATCH /api/habits/:id", () => {
     assert.equal(updated.target, 45);
     // Untouched fields survive a partial update.
     assert.equal(updated.unit, "分");
+    h.db.close();
+  });
+
+  it("clears the target when the client sends null", async () => {
+    const h = makeHarness();
+    const habit = await createHabit(h, NUMERIC_HABIT);
+
+    const response = await h.app.fetch(request("PATCH", `/api/habits/${habit.id}`, h.cookie, { target: null }));
+
+    assert.equal(response.status, 200);
+    const updated = (await response.json()) as Habit;
+    assert.equal(updated.target, null);
+    // ...and it really is gone from the row, not just from the response.
+    const stored = h.db.prepare("SELECT target FROM habits WHERE id = ?").get(habit.id) as { target: number | null };
+    assert.equal(stored.target, null);
+    h.db.close();
+  });
+
+  it("keeps the stored target when the field is absent", async () => {
+    const h = makeHarness();
+    const habit = await createHabit(h, NUMERIC_HABIT);
+
+    // The distinction the clearing above depends on: omitted means "leave it".
+    const response = await h.app.fetch(request("PATCH", `/api/habits/${habit.id}`, h.cookie, { name: "早朝ラン" }));
+
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as Habit).target, 30);
+    h.db.close();
+  });
+
+  it("still rejects a target that is neither a number nor null", async () => {
+    const h = makeHarness();
+    const habit = await createHabit(h, NUMERIC_HABIT);
+
+    // NaN is not in this list on purpose: JSON has no NaN, and JSON.stringify
+    // turns it into null — which now legitimately means "clear the target".
+    for (const target of ["30", 0, -1, true, [30]]) {
+      const response = await h.app.fetch(request("PATCH", `/api/habits/${habit.id}`, h.cookie, { target }));
+      assert.equal(response.status, 400, `expected 400 for target=${JSON.stringify(target)}`);
+    }
+
+    const stored = h.db.prepare("SELECT target FROM habits WHERE id = ?").get(habit.id) as { target: number | null };
+    assert.equal(stored.target, 30);
     h.db.close();
   });
 
@@ -286,6 +333,104 @@ describe("DELETE /api/habits/:id", () => {
 
     assert.equal((await h.app.fetch(request("DELETE", `/api/habits/${habit.id}`, h.cookie))).status, 200);
     assert.equal((await h.app.fetch(request("DELETE", `/api/habits/${habit.id}`, h.cookie))).status, 404);
+    h.db.close();
+  });
+});
+
+describe("GET /api/habits?include_archived=1", () => {
+  it("adds the archived habits, active ones first", async () => {
+    const h = makeHarness();
+    const kept = await createHabit(h, CHECK_HABIT);
+    const deleted = await createHabit(h, { name: "やめた習慣", kind: "boolean" });
+    assert.equal((await h.app.fetch(request("DELETE", `/api/habits/${deleted.id}`, h.cookie))).status, 200);
+
+    const listed = (await (
+      await h.app.fetch(request("GET", "/api/habits?include_archived=1", h.cookie))
+    ).json()) as Habit[];
+
+    assert.deepEqual(
+      listed.map((habit) => habit.id),
+      [kept.id, deleted.id],
+    );
+    assert.equal(listed[0]?.archived_at, null);
+    assert.notEqual(listed[1]?.archived_at, null);
+
+    // The default is untouched: "the list" still means the active habits.
+    const plain = (await (await h.app.fetch(request("GET", "/api/habits", h.cookie))).json()) as Habit[];
+    assert.deepEqual(
+      plain.map((habit) => habit.id),
+      [kept.id],
+    );
+    h.db.close();
+  });
+
+  it("is still scoped to the calling user", async () => {
+    const h = makeHarness();
+    const habit = await createHabit(h, CHECK_HABIT);
+    await h.app.fetch(request("DELETE", `/api/habits/${habit.id}`, h.cookie));
+
+    const response = await h.app.fetch(request("GET", "/api/habits?include_archived=1", h.otherCookie));
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), []);
+    h.db.close();
+  });
+});
+
+describe("POST /api/habits/:id/restore", () => {
+  it("brings a deleted habit back to the list, with its entries", async () => {
+    const h = makeHarness();
+    const habit = await createHabit(h, CHECK_HABIT);
+    await h.app.fetch(request("PUT", `/api/entries/${habit.id}/2026-03-14`, h.cookie, { value: 1 }));
+    assert.equal((await h.app.fetch(request("DELETE", `/api/habits/${habit.id}`, h.cookie))).status, 200);
+
+    const response = await h.app.fetch(request("POST", `/api/habits/${habit.id}/restore`, h.cookie));
+
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as Habit).archived_at, null);
+
+    const list = (await (await h.app.fetch(request("GET", "/api/habits", h.cookie))).json()) as Habit[];
+    assert.deepEqual(
+      list.map((item) => item.id),
+      [habit.id],
+    );
+
+    // The record made before the delete is still the habit's own.
+    const entries = h.db.prepare("SELECT date FROM entries WHERE habit_id = ?").all(habit.id);
+    assert.equal(entries.length, 1);
+
+    // ...and it accepts writes again.
+    const write = await h.app.fetch(request("PUT", `/api/entries/${habit.id}/2026-03-15`, h.cookie, { value: 1 }));
+    assert.equal(write.status, 200);
+    h.db.close();
+  });
+
+  it("answers 404 for a habit that was never deleted, and for someone else's", async () => {
+    const h = makeHarness();
+    const active = await createHabit(h, CHECK_HABIT);
+    const deleted = await createHabit(h, { name: "消した習慣", kind: "boolean" });
+    await h.app.fetch(request("DELETE", `/api/habits/${deleted.id}`, h.cookie));
+
+    assert.equal((await h.app.fetch(request("POST", `/api/habits/${active.id}/restore`, h.cookie))).status, 404);
+    assert.equal((await h.app.fetch(request("POST", "/api/habits/999/restore", h.cookie))).status, 404);
+    assert.equal((await h.app.fetch(request("POST", `/api/habits/${deleted.id}/restore`, h.otherCookie))).status, 404);
+
+    // The other user's failed attempt must not have restored anything.
+    const row = h.db.prepare("SELECT archived_at FROM habits WHERE id = ?").get(deleted.id) as {
+      archived_at: string | null;
+    };
+    assert.notEqual(row.archived_at, null);
+    h.db.close();
+  });
+
+  it("answers 401 without a session", async () => {
+    const h = makeHarness();
+    const habit = await createHabit(h, CHECK_HABIT);
+    await h.app.fetch(request("DELETE", `/api/habits/${habit.id}`, h.cookie));
+
+    const response = await h.app.fetch(request("POST", `/api/habits/${habit.id}/restore`, `${SESSION_COOKIE}=nope`));
+
+    assert.equal(response.status, 401);
     h.db.close();
   });
 });

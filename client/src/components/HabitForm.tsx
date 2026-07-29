@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { formatValue } from "../../../shared/domain.ts";
 import type { CreateHabitRequest, Habit, HabitKind, UpdateHabitRequest } from "../../../shared/types.ts";
-import { ApiError } from "../api.ts";
+import { describeError } from "../errors.ts";
 
 /**
  * Creates a habit, or edits the one passed in.
@@ -65,14 +65,16 @@ export function HabitForm({ habit, onCreate, onUpdate, onCancelEdit }: HabitForm
       return;
     }
 
-    // Only numeric habits carry a target; the server enforces the same rule, so
-    // this check is about telling the user before the round trip, not about
-    // being the rule.
+    // Only numeric habits carry a target, and an empty box means "no goal" —
+    // `isAchieved()` then counts any value above zero (docs/design.md §2). That
+    // is the only way to *remove* a goal, so the field cannot be mandatory; what
+    // is still rejected here (before the round trip, and again on the server) is
+    // a number that is not one: 0, negative, or not a number at all.
     let parsedTarget: number | null = null;
-    if (kind === "numeric") {
+    if (kind === "numeric" && target.trim() !== "") {
       parsedTarget = Number(target.trim());
-      if (target.trim() === "" || !Number.isFinite(parsedTarget) || parsedTarget <= 0) {
-        setError("目標値は 0 より大きい数値で入力してください");
+      if (!Number.isFinite(parsedTarget) || parsedTarget <= 0) {
+        setError("目標値は 0 より大きい数値で入力してください（空欄なら目標なし）");
         return;
       }
     }
@@ -101,7 +103,9 @@ export function HabitForm({ habit, onCreate, onUpdate, onCancelEdit }: HabitForm
         });
       }
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "保存できませんでした");
+      // Beside the fields the user just filled in, whatever failed: a validation
+      // 400, a 500, or the server not answering at all (AC-6.4).
+      setError(describeError(cause, "保存できませんでした"));
     } finally {
       setPending(false);
     }
@@ -163,9 +167,16 @@ export function HabitForm({ habit, onCreate, onUpdate, onCancelEdit }: HabitForm
                 min="0"
                 step="any"
                 inputMode="decimal"
+                placeholder="空欄なら目標なし"
+                aria-describedby="habit-target-hint"
                 value={target}
                 onChange={(event) => setTarget(event.target.value)}
               />
+              {/* A description, not part of the field's accessible name: the
+                  label stays "目標値" so it is still addressable by it. */}
+              <span className="form__hint" id="habit-target-hint">
+                空欄にすると目標なしになり、0 より大きい記録が達成扱いになります。
+              </span>
             </div>
 
             <div className="form__field">

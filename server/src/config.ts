@@ -24,4 +24,25 @@ export const PORT = readPort(process.env.PORT, 3001);
  */
 export const DB_PATH = path.resolve(process.cwd(), process.env.DB_PATH ?? "data/habits.db");
 
-export const IS_PRODUCTION = process.env.NODE_ENV === "production";
+/**
+ * How the `Secure` flag on the session cookie is decided.
+ *
+ *   auto  … from the scheme the request actually arrived over (the default)
+ *   true  … always set it
+ *   false … never set it
+ *
+ * `auto` is right almost everywhere, because `Secure` is a statement about the
+ * *connection*, not about the build: a Secure cookie sent over plain http is
+ * dropped by the browser, and a non-Secure one sent over https is a leak. The
+ * two overrides exist for deployments whose proxy neither terminates TLS itself
+ * nor forwards `X-Forwarded-Proto` honestly.
+ */
+export type CookieSecureMode = "auto" | "true" | "false";
+
+function readCookieSecure(raw: string | undefined): CookieSecureMode {
+  if (raw === undefined || raw === "" || raw === "auto") return "auto";
+  if (raw === "true" || raw === "false") return raw;
+  throw new Error(`COOKIE_SECURE must be one of auto / true / false, got ${JSON.stringify(raw)}`);
+}
+
+export const COOKIE_SECURE: CookieSecureMode = readCookieSecure(process.env.COOKIE_SECURE);

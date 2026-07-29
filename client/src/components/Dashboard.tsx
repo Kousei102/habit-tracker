@@ -1,11 +1,12 @@
-import { useState } from "react";
-import { toISODate } from "../../../shared/domain.ts";
+import { useMemo, useState } from "react";
 import { heatmapStart } from "../../../shared/heatmap.ts";
 import type { CreateHabitRequest, Habit, SessionUser, UpdateHabitRequest } from "../../../shared/types.ts";
-import { ApiError, logout } from "../api.ts";
+import { logout } from "../api.ts";
+import { describeError } from "../errors.ts";
 import { useEntryHistory } from "../hooks/useEntryHistory.ts";
 import { useHabits } from "../hooks/useHabits.ts";
 import { useStats } from "../hooks/useStats.ts";
+import { useToday } from "../hooks/useToday.ts";
 import { HabitForm } from "./HabitForm.tsx";
 import { HeatmapPanel } from "./HeatmapPanel.tsx";
 import { StatsPanel } from "./StatsPanel.tsx";
@@ -20,20 +21,36 @@ type DashboardProps = {
  * The signed-in view: who is here, today's habits, and the form that maintains
  * them.
  *
- * **This is where "today" is decided.** The browser's calendar day is read once,
- * on mount, and handed to everything below as a `YYYY-MM-DD` string; no server
- * code ever derives a date (docs/design.md). Reading it once also means the day
- * cannot change under a rendered list mid-session.
+ * **This is where "today" enters the app.** `useToday` reads the browser's
+ * calendar day (and keeps it current across midnight); everything below receives
+ * it as a `YYYY-MM-DD` string and no server code ever derives a date
+ * (docs/design.md §1).
  */
 export function Dashboard({ user, onLoggedOut }: DashboardProps) {
-  const [today] = useState(() => toISODate(new Date()));
-  const { habits, values, status, error, createHabit, updateHabit, deleteHabit, setValue } = useHabits(today);
+  const today = useToday();
+  const {
+    habits,
+    archivedHabits,
+    values,
+    status,
+    error,
+    createHabit,
+    updateHabit,
+    deleteHabit,
+    restoreHabit,
+    setValue,
+  } = useHabits(today);
   const stats = useStats(today);
   // The heatmap's window is decided here too, from the same "today": the server
   // is told both ends as strings and never works out a range of its own.
-  // (A plain const: `today` never changes within a session and the bound is a
-  // string, so the hook's dependencies stay stable across renders.)
-  const history = useEntryHistory(heatmapStart(today), today);
+  //
+  // Memoised on `today` rather than recomputed inline. The value is a string, so
+  // a fresh call would compare equal and not refetch on its own — but it is the
+  // dependency of a fetch that now has a reason to change, and "the argument to
+  // an effect's dependency is recomputed every render" is one edit away from a
+  // request loop. Tying it to the only input it has removes the question.
+  const heatmapFrom = useMemo(() => heatmapStart(today), [today]);
+  const history = useEntryHistory(heatmapFrom, today);
 
   /**
    * Every streak and rate is a function of the records, so any write invalidates
@@ -55,21 +72,35 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
   const [editing, setEditing] = useState<Habit | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  /** The habit deleted a moment ago, kept so the click can be taken back. */
+  const [undoable, setUndoable] = useState<Habit | null>(null);
 
+  /**
+   * Signs out — and, when that fails, says so instead of pretending.
+   *
+   * Dropping to the login screen on a failed logout used to look tidier, but it
+   * is a lie the very next reload contradicts: the session is still valid, so
+   * `/api/auth/me` answers 200 and the dashboard comes straight back. Staying
+   * here with a visible error is both honest and actionable — the button can be
+   * pressed again (AC-6.4).
+   */
   async function handleLogout(): Promise<void> {
     if (pending) return;
     setPending(true);
+    setActionError(null);
     try {
       await logout();
-    } finally {
-      // Even if the request failed, the local session is over: the next API call
-      // would 401 anyway, and leaving the user stuck on the dashboard is worse.
       onLoggedOut();
+    } catch (cause) {
+      setActionError(describeError(cause, "ログアウトできませんでした"));
+    } finally {
+      setPending(false);
     }
   }
 
   async function handleCreate(input: CreateHabitRequest): Promise<Habit> {
     setActionError(null);
+    setUndoable(null);
     // Errors are deliberately not caught here — the form shows them next to the
     // fields the user just filled in.
     const created = await createHabit(input);
@@ -79,6 +110,7 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
 
   async function handleUpdate(id: number, patch: UpdateHabitRequest): Promise<Habit> {
     setActionError(null);
+    setUndoable(null);
     const updated = await updateHabit(id, patch);
     // Only leave edit mode once the change actually landed.
     setEditing(null);
@@ -87,14 +119,35 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
     return updated;
   }
 
+  /**
+   * Deletes a habit and offers the click back.
+   *
+   * There is no confirmation dialog on purpose: the delete is logical, the row
+   * and its entries survive it, and a modal the user did not ask for costs
+   * everybody a click to save one person a mistake. That trade only works if the
+   * mistake is actually recoverable *from the screen*, which is what the undo
+   * below is for — the database has always been able to do it.
+   */
   async function handleDelete(habit: Habit): Promise<void> {
     setActionError(null);
     try {
       await deleteHabit(habit.id);
       if (editing?.id === habit.id) setEditing(null);
+      setUndoable(habit);
       await refreshStats();
     } catch (cause) {
-      setActionError(cause instanceof ApiError ? cause.message : "習慣を削除できませんでした");
+      setActionError(describeError(cause, "習慣を削除できませんでした"));
+    }
+  }
+
+  async function handleUndoDelete(habit: Habit): Promise<void> {
+    setActionError(null);
+    try {
+      await restoreHabit(habit.id);
+      setUndoable(null);
+      await refreshStats();
+    } catch (cause) {
+      setActionError(describeError(cause, "習慣を元に戻せませんでした"));
     }
   }
 
@@ -126,6 +179,31 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
             {actionError}
           </p>
         )}
+
+        {/* Deliberately not role="alert"/"status": nothing failed, and a live
+            region announcing every deletion would talk over the user. The undo
+            is a button with its own name, so it is reachable by role either
+            way. */}
+        {undoable !== null && (
+          <p className="undo" data-testid="undo-delete">
+            <span>「{undoable.name}」を削除しました。記録は残っています。</span>
+            <button
+              className="button button--quiet button--small"
+              type="button"
+              onClick={() => void handleUndoDelete(undoable)}
+            >
+              削除を取り消す
+            </button>
+            <button
+              className="button button--quiet button--small"
+              type="button"
+              aria-label="削除の通知を閉じる"
+              onClick={() => setUndoable(null)}
+            >
+              閉じる
+            </button>
+          </p>
+        )}
       </section>
 
       <TodayPanel
@@ -150,6 +228,7 @@ export function Dashboard({ user, onLoggedOut }: DashboardProps) {
       <HeatmapPanel
         today={today}
         habits={habits}
+        archivedHabits={archivedHabits}
         entries={history.entries}
         status={history.status}
         error={history.error}

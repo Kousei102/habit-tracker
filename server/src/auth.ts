@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { ErrorResponse, SessionUser } from "../../shared/types.ts";
-import { IS_PRODUCTION } from "./config.ts";
+import { COOKIE_SECURE } from "./config.ts";
 
 /**
  * Password hashing and session handling.
@@ -123,26 +123,67 @@ export function deleteExpiredSessions(db: DatabaseSync, now: Date = new Date()):
 }
 
 /**
- * Cookie flags: `HttpOnly` keeps the token away from scripts (AC-2.3),
- * `SameSite=Lax` blocks cross-site POSTs while keeping normal navigation
- * working, and `Secure` is production-only because dev and E2E run over plain
- * http on localhost.
+ * Whether the request reached us over TLS.
+ *
+ * A proxy that terminates TLS forwards plain http to this process, so the URL
+ * alone would say "not secure" for every request behind one; `X-Forwarded-Proto`
+ * is the header such a proxy sets and is therefore read first. Only the first
+ * entry counts — a chain of proxies appends, and it is the client-facing hop
+ * that decides.
+ *
+ * Pure, and exported, because this is the one decision that silently breaks
+ * authentication when it is wrong: a `Secure` cookie issued over http is
+ * discarded by the browser without a word.
  */
-function cookieOptions(): { httpOnly: true; sameSite: "Lax"; path: "/"; secure: boolean } {
-  return { httpOnly: true, sameSite: "Lax", path: "/", secure: IS_PRODUCTION };
+export function isSecureRequest(url: string, forwardedProto?: string | null): boolean {
+  const forwarded = (forwardedProto ?? "").split(",")[0]?.trim().toLowerCase() ?? "";
+  if (forwarded === "https") return true;
+  if (forwarded === "http") return false;
+
+  try {
+    return new URL(url).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 type AnyContext = Parameters<MiddlewareHandler>[0];
 
+/**
+ * Cookie flags: `HttpOnly` keeps the token away from scripts (AC-2.3),
+ * `SameSite=Lax` blocks cross-site POSTs while keeping normal navigation
+ * working, and `Secure` follows the scheme the request arrived over.
+ *
+ * It used to follow `NODE_ENV` instead, which is the same thing only by
+ * coincidence. A production build reached over plain http — a LAN address, a
+ * docker hostname, the E2E harness on `http://localhost:3101` — issued a
+ * `Secure` cookie that the browser then refused to store, and every request
+ * after the login came back 401 with nothing anywhere saying why. (localhost is
+ * a secure context in Chromium, which is exactly what made the bug invisible
+ * until the host changed.) Reading the scheme is correct in both directions: a
+ * deployment behind TLS gets `Secure` even if NODE_ENV was never set, and http
+ * never gets a cookie the browser will throw away.
+ */
+function cookieOptions(c: AnyContext): { httpOnly: true; sameSite: "Lax"; path: "/"; secure: boolean } {
+  const secure =
+    COOKIE_SECURE === "auto"
+      ? isSecureRequest(c.req.url, c.req.header("x-forwarded-proto"))
+      : COOKIE_SECURE === "true";
+
+  return { httpOnly: true, sameSite: "Lax", path: "/", secure };
+}
+
 export function setSessionCookie(c: AnyContext, session: CreatedSession): void {
   setCookie(c, SESSION_COOKIE, session.token, {
-    ...cookieOptions(),
+    ...cookieOptions(c),
     expires: new Date(session.expiresAt),
   });
 }
 
 export function clearSessionCookie(c: AnyContext): void {
-  deleteCookie(c, SESSION_COOKIE, cookieOptions());
+  // The attributes have to match the ones the cookie was set with, or the
+  // browser keeps the original alongside the expired copy.
+  deleteCookie(c, SESSION_COOKIE, cookieOptions(c));
 }
 
 export function readSessionCookie(c: AnyContext): string | undefined {

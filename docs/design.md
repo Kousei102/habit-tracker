@@ -40,6 +40,10 @@ today が未達成なら昨日から遡って数えます。素直に「today �
 
 `archived_at` をセットし、`entries` は残します。物理削除すると過去のヒートマップに穴が空きます。「もうやらない習慣」を消したいだけで、やった事実まで消したいわけではありません。
 
+残した以上、**画面から読めなければ意味がありません**。ヒートマップの習慣セレクタには、期間内に記録のある削除済み習慣も「〇〇（削除済み）」として並びます。全体ビューの分母は有効な習慣だけなので、有効な習慣が 0 件のときは全体ビューを出さず、削除済み習慣の履歴を直接表示します。
+
+削除に確認ダイアログは出しません。代わりに削除直後に「削除を取り消す」を出します（`POST /api/habits/:id/restore`）。取り消せない削除に確認を付けるより、取り消せる削除のほうが安全です。
+
 ### 5. 統計は SQL ではなく JS で計算
 
 個人利用なら `entries` は年間でも数千行です。全件読んで JS で計算するほうが読みやすく、何より `node:test` で純関数として単体テストが書けます。ストリーク計算はこのアプリで最もバグりやすい箇所なので、テストしやすさを優先します。
@@ -90,8 +94,9 @@ CREATE INDEX idx_habits_user ON habits(user_id);
 | POST | `/api/auth/login` | `{username, password}` → HttpOnly セッション Cookie |
 | POST | `/api/auth/logout` | セッション削除 |
 | GET | `/api/auth/me` | 認証状態確認（未認証は 401） |
-| GET / POST | `/api/habits` | 一覧（`archived_at IS NULL`）/ 作成 |
-| PATCH / DELETE | `/api/habits/:id` | 更新 / 論理削除 |
+| GET / POST | `/api/habits` | 一覧（`archived_at IS NULL`。`?include_archived=1` で削除済みも）/ 作成 |
+| PATCH / DELETE | `/api/habits/:id` | 更新（`target: null` で目標を解除）/ 論理削除 |
+| POST | `/api/habits/:id/restore` | 論理削除の取り消し（`archived_at` を NULL に戻す） |
 | GET | `/api/entries?from=&to=` | 期間内の記録。ヒートマップは 1 年分を 1 リクエストで取得 |
 | PUT | `/api/entries/:habitId/:date` | `{value}` を upsert。`value: 0` で記録解除 |
 | GET | `/api/stats?today=YYYY-MM-DD` | 現在 / 最長ストリーク、直近 30 日達成率 |
@@ -103,7 +108,8 @@ CREATE INDEX idx_habits_user ON habits(user_id);
 ## 認証
 
 - `node:crypto` の `scrypt` でハッシュ（bcrypt 等の外部依存を足さない）。比較は `timingSafeEqual`
-- セッショントークンは `randomBytes(32).toString('hex')`。Cookie は `HttpOnly` / `SameSite=Lax` / `Path=/`、本番のみ `Secure`。有効期限 30 日
+- セッショントークンは `randomBytes(32).toString('hex')`。Cookie は `HttpOnly` / `SameSite=Lax` / `Path=/`。有効期限 30 日
+- `Secure` は **リクエストが実際に来たスキーム**で決める（`X-Forwarded-Proto` 優先、`COOKIE_SECURE` で上書き可）。`NODE_ENV` では決めない: `Secure` は接続の性質でありビルド種別ではないので、本番ビルドを http で配信した瞬間にブラウザが Cookie を捨て、原因の分からない 401 だけが残る
 - ユーザー登録画面は作らない。`npm run seed-user` が `.env` から作成する
 - 開発時は Vite proxy 経由で same-origin になるため CORS 設定は不要
 

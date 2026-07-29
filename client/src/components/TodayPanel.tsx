@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { formatValue, isAchieved } from "../../../shared/domain.ts";
 import type { Habit } from "../../../shared/types.ts";
-import { ApiError } from "../api.ts";
+import { describeError } from "../errors.ts";
 import type { HabitsStatus } from "../hooks/useHabits.ts";
 
 /**
@@ -125,7 +125,11 @@ function HabitRow({ habit, value, onSetValue, onEdit, onDelete }: HabitRowProps)
     } catch (cause) {
       lastSent.current = null;
       setDraft(formatValue(value));
-      setRowError(cause instanceof ApiError ? cause.message : "記録を保存できませんでした");
+      // Whatever went wrong — a 500, a 404, the server simply not being there —
+      // the row says so rather than quietly snapping back to the old value
+      // (AC-6.4). This is the path a debounced save takes too: `flush` ends up
+      // here, so a write the user never explicitly triggered still reports.
+      setRowError(describeError(cause, "記録を保存できませんでした"));
     } finally {
       // Unless newer typing is already waiting to be written: dropping back to
       // the stored value between two saves would make the row flicker through a
@@ -161,16 +165,30 @@ function HabitRow({ habit, value, onSetValue, onEdit, onDelete }: HabitRowProps)
   });
 
   useEffect(() => {
-    // The worst case is typing and reloading straight away: the debounce has
-    // not expired, and the row is about to be destroyed. `pagehide` fires
-    // before that happens, and the write itself is `keepalive` (api.ts), so the
-    // request outlives the document instead of being cancelled with it — which
-    // is what keeps AC-3.4 ("the value survives a reload") true.
+    // The worst case is typing and then leaving straight away: the debounce has
+    // not expired, and the row is about to be destroyed. The write itself is
+    // `keepalive` (api.ts), so once it is sent it outlives the document instead
+    // of being cancelled with it — which is what keeps AC-3.4 ("the value
+    // survives a reload") true. The job here is to get it sent in time.
+    //
+    // Two listeners, because neither fires everywhere:
+    //  - `pagehide` covers reloads and navigations, including into the bfcache;
+    //  - `visibilitychange` → hidden is the *only* one a mobile browser
+    //    guarantees when the app is switched away and later killed in the
+    //    background. On that path `pagehide` may never arrive at all.
+    // Both end up in `flush`, which is idempotent: with nothing queued it does
+    // nothing, so a browser that fires both writes once.
     const onHide = () => flushRef.current();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") flushRef.current();
+    };
+
     window.addEventListener("pagehide", onHide);
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
       window.removeEventListener("pagehide", onHide);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       if (timer.current !== null) clearTimeout(timer.current);
     };
   }, []);
@@ -264,8 +282,9 @@ function HabitRow({ habit, value, onSetValue, onEdit, onDelete }: HabitRowProps)
         >
           編集
         </button>
-        {/* No confirm() dialog: a habit is recoverable (the row is only archived),
-            and a modal the user cannot see coming is worse than an undo they can. */}
+        {/* No confirm() dialog: the delete is logical, and the dashboard offers
+            「削除を取り消す」 straight afterwards. An undo the user can see beats a
+            modal they did not ask for. */}
         <button
           className="button button--quiet button--small"
           type="button"

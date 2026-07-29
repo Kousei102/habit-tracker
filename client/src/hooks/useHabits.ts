@@ -19,6 +19,14 @@ export type HabitsStatus = "loading" | "ready" | "error";
 
 export type UseHabits = {
   habits: Habit[];
+  /**
+   * The deleted (archived) habits, newest list order.
+   *
+   * Loaded from the same response as `habits`, not a second request. Only the
+   * heatmap uses them: their records are kept by design, and a year of history
+   * with no name against it is history the user cannot read.
+   */
+  archivedHabits: Habit[];
   /** Today's saved value per habit id. A missing id means "no record yet". */
   values: Record<number, number>;
   status: HabitsStatus;
@@ -28,6 +36,8 @@ export type UseHabits = {
   createHabit: (input: CreateHabitRequest) => Promise<Habit>;
   updateHabit: (id: number, patch: UpdateHabitRequest) => Promise<Habit>;
   deleteHabit: (id: number) => Promise<void>;
+  /** Undo of `deleteHabit`: the habit returns to the list with its records. */
+  restoreHabit: (id: number) => Promise<Habit>;
   /**
    * Upserts today's value and folds the server's answer back into `values`.
    *
@@ -50,6 +60,7 @@ function toValueMap(entries: Entry[]): Record<number, number> {
 
 export function useHabits(today: string): UseHabits {
   const [habits, setHabits] = useState<Habit[]>([]);
+  const [archivedHabits, setArchivedHabits] = useState<Habit[]>([]);
   const [values, setValues] = useState<Record<number, number>>({});
   const [status, setStatus] = useState<HabitsStatus>("loading");
   const [error, setError] = useState<string | null>(null);
@@ -67,9 +78,14 @@ export function useHabits(today: string): UseHabits {
     try {
       // One day's window: the panel only ever shows today. The heatmap will ask
       // for a wider range of its own.
-      const [habitList, entries] = await Promise.all([api.getHabits(), api.getEntries(today, today)]);
+      //
+      // Archived habits ride along in the same response and are split out here,
+      // so the today list stays exactly what it was while the heatmap gains the
+      // names it needs. One request, one loading state, one error path.
+      const [habitList, entries] = await Promise.all([api.getHabits(true), api.getEntries(today, today)]);
       if (!mounted.current) return;
-      setHabits(habitList);
+      setHabits(habitList.filter((habit) => habit.archived_at === null));
+      setArchivedHabits(habitList.filter((habit) => habit.archived_at !== null));
       setValues(toValueMap(entries));
       setError(null);
       setStatus("ready");
@@ -112,6 +128,15 @@ export function useHabits(today: string): UseHabits {
     [reload],
   );
 
+  const restoreHabit = useCallback(
+    async (id: number): Promise<Habit> => {
+      const restored = await api.restoreHabit(id);
+      await reload();
+      return restored;
+    },
+    [reload],
+  );
+
   const setValue = useCallback(
     async (habitId: number, value: number): Promise<Entry> => {
       // The stored value comes back from the server, so what the screen shows as
@@ -123,5 +148,17 @@ export function useHabits(today: string): UseHabits {
     [today],
   );
 
-  return { habits, values, status, error, reload, createHabit, updateHabit, deleteHabit, setValue };
+  return {
+    habits,
+    archivedHabits,
+    values,
+    status,
+    error,
+    reload,
+    createHabit,
+    updateHabit,
+    deleteHabit,
+    restoreHabit,
+    setValue,
+  };
 }
