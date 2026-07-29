@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { CreateHabitRequest, Entry, Habit, UpdateHabitRequest } from "../../../shared/types.ts";
-import * as api from "../api.ts";
+import { useCallback, useEffect, useState } from "react";
+import type { CreateHabitInput, Entry, Habit, UpdateHabitInput } from "../../../shared/types.ts";
+import * as store from "../data/store.ts";
+import { describeError } from "../errors.ts";
 
 /**
  * Loads the habits and the day's records, and owns every write that changes
@@ -8,11 +9,13 @@ import * as api from "../api.ts";
  *
  * The `today` argument is a `YYYY-MM-DD` string the caller derived from the
  * browser clock. Passing it in (rather than reading `new Date()` here) keeps the
- * "what day is it" decision in exactly one place on the client, and mirrors the
- * server rule that a date is always data, never something inferred.
+ * "what day is it" decision in exactly one place.
  *
- * Mutations reject on failure instead of swallowing the error: the component
- * that triggered the write is the one that knows where to show it.
+ * **Everything here is synchronous.** The store is `localStorage`, which answers
+ * immediately (AC-7.5); there is no in-flight state to track and no response that
+ * can arrive after the component is gone. Mutations throw on failure instead of
+ * swallowing the error: the component that triggered the write is the one that
+ * knows where to show it.
  */
 
 export type HabitsStatus = "loading" | "ready" | "error";
@@ -20,37 +23,32 @@ export type HabitsStatus = "loading" | "ready" | "error";
 export type UseHabits = {
   habits: Habit[];
   /**
-   * The deleted (archived) habits, newest list order.
+   * The deleted (archived) habits, in list order.
    *
-   * Loaded from the same response as `habits`, not a second request. Only the
-   * heatmap uses them: their records are kept by design, and a year of history
-   * with no name against it is history the user cannot read.
+   * Read in the same pass as `habits`. Only the heatmap uses them: their records
+   * are kept by design, and a year of history with no name against it is history
+   * the user cannot read.
    */
   archivedHabits: Habit[];
   /** Today's saved value per habit id. A missing id means "no record yet". */
   values: Record<number, number>;
   status: HabitsStatus;
-  /** Set only when the initial load failed; mutation errors are thrown instead. */
+  /** Set only when the load failed; mutation errors are thrown instead. */
   error: string | null;
-  reload: () => Promise<void>;
-  createHabit: (input: CreateHabitRequest) => Promise<Habit>;
-  updateHabit: (id: number, patch: UpdateHabitRequest) => Promise<Habit>;
-  deleteHabit: (id: number) => Promise<void>;
+  reload: () => void;
+  createHabit: (input: CreateHabitInput) => Habit;
+  updateHabit: (id: number, patch: UpdateHabitInput) => Habit;
+  deleteHabit: (id: number) => void;
   /** Undo of `deleteHabit`: the habit returns to the list with its records. */
-  restoreHabit: (id: number) => Promise<Habit>;
+  restoreHabit: (id: number) => Habit;
   /**
-   * Upserts today's value and folds the server's answer back into `values`.
+   * Records today's value and folds the stored result back into `values`.
    *
-   * Returns that answer so the caller can hand it to anything else holding
-   * records — the heatmap's cached year, in particular, which would otherwise
-   * have to re-read every entry after each keystroke.
+   * Returns that result so the caller can hand it to anything else holding
+   * records — the heatmap's cached year, in particular.
    */
-  setValue: (habitId: number, value: number) => Promise<Entry>;
+  setValue: (habitId: number, value: number) => Entry;
 };
-
-function messageOf(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
-}
 
 function toValueMap(entries: Entry[]): Record<number, number> {
   const values: Record<number, number> = {};
@@ -65,84 +63,77 @@ export function useHabits(today: string): UseHabits {
   const [status, setStatus] = useState<HabitsStatus>("loading");
   const [error, setError] = useState<string | null>(null);
 
-  // A response that arrives after unmount must not call setState.
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-
-  const reload = useCallback(async () => {
+  const reload = useCallback(() => {
     try {
-      // One day's window: the panel only ever shows today. The heatmap will ask
-      // for a wider range of its own.
+      // One day's window: the panel only ever shows today. The heatmap asks for
+      // a wider range of its own.
       //
-      // Archived habits ride along in the same response and are split out here,
-      // so the today list stays exactly what it was while the heatmap gains the
-      // names it needs. One request, one loading state, one error path.
-      const [habitList, entries] = await Promise.all([api.getHabits(true), api.getEntries(today, today)]);
-      if (!mounted.current) return;
+      // Archived habits come back in the same read and are split out here, so
+      // the today list stays exactly what it was while the heatmap gains the
+      // names it needs.
+      const habitList = store.getHabits(true);
+      const entries = store.getEntries(today, today);
+
       setHabits(habitList.filter((habit) => habit.archived_at === null));
       setArchivedHabits(habitList.filter((habit) => habit.archived_at !== null));
       setValues(toValueMap(entries));
       setError(null);
       setStatus("ready");
     } catch (cause) {
-      if (!mounted.current) return;
-      // A 401 is already handled globally in api.ts (back to the login screen);
-      // anything else has to be visible rather than a permanent spinner.
-      setError(messageOf(cause));
+      // An unreadable document is the main way this fails (AC-7.6). It has to be
+      // visible rather than a permanent spinner, and it must not be treated as
+      // "no habits yet" — that would invite the user to recreate everything on
+      // top of data that is still there.
+      setError(describeError(cause, "データを読み込めませんでした"));
       setStatus("error");
     }
   }, [today]);
 
   useEffect(() => {
-    void reload();
+    reload();
   }, [reload]);
 
   const createHabit = useCallback(
-    async (input: CreateHabitRequest): Promise<Habit> => {
-      const created = await api.createHabit(input);
-      await reload();
+    (input: CreateHabitInput): Habit => {
+      const created = store.createHabit(input);
+      reload();
       return created;
     },
     [reload],
   );
 
   const updateHabit = useCallback(
-    async (id: number, patch: UpdateHabitRequest): Promise<Habit> => {
-      const updated = await api.updateHabit(id, patch);
-      await reload();
+    (id: number, patch: UpdateHabitInput): Habit => {
+      const updated = store.updateHabit(id, patch);
+      reload();
       return updated;
     },
     [reload],
   );
 
   const deleteHabit = useCallback(
-    async (id: number): Promise<void> => {
-      await api.deleteHabit(id);
-      await reload();
+    (id: number): void => {
+      store.deleteHabit(id);
+      reload();
     },
     [reload],
   );
 
   const restoreHabit = useCallback(
-    async (id: number): Promise<Habit> => {
-      const restored = await api.restoreHabit(id);
-      await reload();
+    (id: number): Habit => {
+      const restored = store.restoreHabit(id);
+      reload();
       return restored;
     },
     [reload],
   );
 
   const setValue = useCallback(
-    async (habitId: number, value: number): Promise<Entry> => {
-      // The stored value comes back from the server, so what the screen shows as
+    (habitId: number, value: number): Entry => {
+      // The stored value comes back from the store, so what the screen shows as
       // saved is what was actually written — not what we hoped to write.
-      const entry = await api.putEntry(habitId, today, value);
-      if (mounted.current) setValues((current) => ({ ...current, [entry.habit_id]: entry.value }));
+      const entry = store.putEntry(habitId, today, value);
+      setValues((current) => ({ ...current, [entry.habit_id]: entry.value }));
       return entry;
     },
     [today],

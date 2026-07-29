@@ -1,11 +1,13 @@
 node_modules/
 dist/
-.env
 
-# Development database (SQLite + WAL sidecars)
-data/
+# Left over from the server this project used to have (Phase 7 removed both).
+# Anchored to the repo root on purpose: an unanchored `data/` also matches
+# client/src/data/, which is source and silently vanished from `git status`.
+/.env
+/data/
 
-# Harness scratch: e2e database, Playwright reports, traces
+# Harness scratch: Playwright reports, traces
 .harness/tmp/
 test-results/
 

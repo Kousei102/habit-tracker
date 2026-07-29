@@ -20,8 +20,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # 22.18+ is required: the server runs TypeScript through Node's type
-          # stripping, and node:sqlite has to work without a flag.
+          # 22.18+ is required: the unit tests run TypeScript files directly
+          # through Node's type stripping.
           node-version: "22"
           cache: npm
 
@@ -35,8 +35,8 @@ jobs:
       # computed colours, so it targets one engine on purpose.
       - run: npx playwright install --with-deps chromium
 
-      # Builds the client and serves it from the Node server, so this exercises
-      # the production path rather than the Vite dev server.
+      # Builds the client and serves client/dist as static files, so this
+      # exercises the deployed path rather than the Vite dev server.
       - run: npm run e2e
 
       - name: Upload the Playwright report

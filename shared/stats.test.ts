@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { addDays } from "../../shared/domain.ts";
+import { addDays } from "./domain.ts";
 import type { DatedValue, StatsHabit } from "./stats.ts";
 import { RATE_WINDOW_DAYS, computeHabitStats, computeStats } from "./stats.ts";
 

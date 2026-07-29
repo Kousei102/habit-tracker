@@ -1,56 +1,74 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ApiError, NETWORK_ERROR, describeError, fallbackMessage, messageFromBody } from "./errors.ts";
+import {
+  DataError,
+  describeError,
+  isQuotaExceeded,
+  quotaError,
+  unavailableError,
+  validationError,
+} from "./errors.ts";
 
 /**
- * AC-6.4 is "an API failure produces something the user can read". These are the
- * words that end up on screen, so they are worth pinning: the failure modes that
- * matter (the server down, a 500 with an HTML body) are exactly the ones where
- * nothing supplies a message and a naive `catch` shows an empty string.
+ * AC-7.12 (inheriting AC-6.4) is "a failed save produces something the user can
+ * read". These are the words that end up on screen, so they are worth pinning:
+ * the failure that matters — `localStorage` refusing a write — arrives as a
+ * `DOMException` whose own message is English, and a naive `catch` shows either
+ * that or nothing at all.
  */
 
-describe("messageFromBody", () => {
-  it("prefers the server's own explanation", () => {
-    assert.equal(messageFromBody({ error: "習慣が見つかりません" }), "習慣が見つかりません");
+describe("the messages that reach the screen", () => {
+  it("never returns an empty string, and never leaks English", () => {
+    for (const error of [quotaError(), unavailableError()]) {
+      assert.notEqual(error.message.trim(), "");
+      assert.doesNotMatch(error.message, /[A-Za-z]{4,}/, error.message);
+    }
   });
 
-  it("ignores a body that carries no usable message", () => {
-    for (const body of [null, undefined, "boom", 42, {}, { error: "" }, { error: "   " }, { error: 500 }, []]) {
-      assert.equal(messageFromBody(body), null, `body=${JSON.stringify(body)}`);
-    }
+  it("tells the user what to do about a full store, not just that it is full", () => {
+    assert.match(quotaError().message, /容量/);
+    assert.match(quotaError().message, /削除|整理/);
   });
 });
 
-describe("fallbackMessage", () => {
-  it("never returns an empty string, for any status", () => {
-    for (const status of [NETWORK_ERROR, 400, 401, 403, 404, 409, 418, 500, 502, 503]) {
-      const message = fallbackMessage(status);
-      assert.notEqual(message.trim(), "", `status=${status}`);
-      // No English internals leaking to the screen.
-      assert.doesNotMatch(message, /[A-Za-z]{4,}/, `status=${status}: ${message}`);
+describe("isQuotaExceeded", () => {
+  it("recognises the spelling of every engine that has one", () => {
+    const cases: unknown[] = [
+      { name: "QuotaExceededError" },
+      // Chrome: the legacy DOMException code, with a name that says nothing.
+      { name: "Error", code: 22 },
+      // Firefox.
+      { name: "NS_ERROR_DOM_QUOTA_REACHED", code: 1014 },
+      // Older Safari, private browsing.
+      { name: "QUOTA_EXCEEDED_ERR" },
+    ];
+
+    for (const cause of cases) {
+      assert.equal(isQuotaExceeded(cause), true, JSON.stringify(cause));
     }
   });
 
-  it("says the server could not be reached when the request never landed", () => {
-    assert.match(fallbackMessage(NETWORK_ERROR), /接続できませんでした/);
-  });
-
-  it("keeps the status in the text for a server error", () => {
-    assert.match(fallbackMessage(500), /500/);
-    assert.match(fallbackMessage(503), /503/);
+  it("does not mistake anything else for a full store", () => {
+    for (const cause of [null, undefined, "boom", 22, new Error("SecurityError"), { name: "TypeError" }]) {
+      assert.equal(isQuotaExceeded(cause), false, String(cause));
+    }
   });
 });
 
 describe("describeError", () => {
-  it("shows the API's message as-is", () => {
-    assert.equal(describeError(new ApiError(404, "習慣が見つかりません"), "保存できませんでした"), "習慣が見つかりません");
+  it("shows a DataError's own message as-is", () => {
+    assert.equal(
+      describeError(validationError("習慣名を入力してください"), "保存できませんでした"),
+      "習慣名を入力してください",
+    );
+    assert.equal(describeError(quotaError(), "保存できませんでした"), quotaError().message);
   });
 
   it("wraps an unexpected error in the caller's wording", () => {
-    // What a rejected fetch looks like before api.ts has had a chance to wrap it.
+    // What a browser exception looks like before the store has wrapped it.
     assert.equal(
-      describeError(new TypeError("Failed to fetch"), "記録を保存できませんでした"),
-      "記録を保存できませんでした（Failed to fetch）",
+      describeError(new TypeError("Cannot read properties of null"), "記録を保存できませんでした"),
+      "記録を保存できませんでした（Cannot read properties of null）",
     );
   });
 
@@ -58,5 +76,12 @@ describe("describeError", () => {
     assert.equal(describeError("boom", "保存できませんでした"), "保存できませんでした");
     assert.equal(describeError(undefined, "保存できませんでした"), "保存できませんでした");
     assert.equal(describeError(new Error("  "), "保存できませんでした"), "保存できませんでした");
+  });
+
+  it("keeps a DataError distinguishable by code, not by message matching", () => {
+    const error = new DataError("not-found", "習慣が見つかりません");
+    assert.equal(error.code, "not-found");
+    assert.equal(error.name, "DataError");
+    assert.ok(error instanceof Error);
   });
 });

@@ -1,87 +1,44 @@
-import { expect, test } from "../fixtures.ts";
+import { expect, expectDashboardReady, open, test } from "../fixtures.ts";
 
-// Phase 1 acceptance criteria under test here:
+// Phase 1 acceptance criteria, as they stand after Phase 7.
 //
-//   AC-1.7 [E2E] Opening `/` in a browser shows a page, and the result the client
-//                fetched from `/api/health` is rendered on screen.
+// AC-1.2 – AC-1.6 were retired with the server and SQLite (docs/phases.md, the
+// ⚠ section). AC-1.7 said the client must render the result of `GET /api/health`;
+// there is no such route any more, and AC-7.3 now forbids the request outright,
+// so that half of the criterion is superseded rather than failed. What survives —
+// and is still worth a spec — is the half that was never about the server:
 //
-// AC-1.3 (`GET /api/health` -> 200 `{"ok":true}`) is additionally pinned from the
-// browser's own request context, because AC-1.7 is only meaningful if what the
-// page renders came from that response.
-//
-// Written against the AC, not against the markup: the health readout is located
-// by its `status` role (the accessible way to expose an async result) and by the
-// text a user reads, never by CSS classes or DOM shape.
+//   AC-1.7 (residual) Opening `/` in a browser shows the page.
+//   AC-1.8            `npx tsc --noEmit` passes. Checked by the harness, not here.
 
-const HEALTH_PATH = "/api/health";
+test.describe("Phase 1 — the app loads", () => {
+  test("AC-1.7 (residual): opening / renders the app", async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
 
-/** The user-visible health readout. `role=status` is how an async result is exposed to AT. */
-function healthReadout(page: import("@playwright/test").Page) {
-  return page.getByRole("status");
-}
+    await open(page);
 
-test.describe("Phase 1 — scaffold", () => {
-  test("AC-1.3: GET /api/health answers 200 with {\"ok\":true}", async ({ request }) => {
-    const response = await request.get(HEALTH_PATH);
+    await expect(page.getByRole("heading", { level: 1, name: "習慣トラッカー" })).toBeVisible();
+    await expectDashboardReady(page);
 
-    expect(response.status()).toBe(200);
-    expect(response.headers()["content-type"] ?? "").toMatch(/application\/json/);
-    expect(await response.json()).toEqual({ ok: true });
+    // A blank page with a broken bundle would still have a <title>; an uncaught
+    // exception is what that failure actually looks like.
+    expect(pageErrors, "the page threw while loading").toEqual([]);
   });
 
-  test("AC-1.7: opening / renders a page", async ({ page }) => {
+  test("the built bundle is loaded from the same origin as the document", async ({ page }) => {
     const response = await page.goto("/");
-
     expect(response?.status()).toBe(200);
+    expect(response?.headers()["content-type"] ?? "").toMatch(/text\/html/);
 
-    // A page, not a blank shell: a level-1 heading is visible and the document has a title.
-    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    await expect(page).toHaveTitle(/.+/);
-  });
+    const origin = new URL(page.url()).origin;
+    const scripts = await page
+      .locator("script[src]")
+      .evaluateAll((nodes) => nodes.map((node) => (node as HTMLScriptElement).src));
 
-  test("AC-1.7: the client fetches /api/health and renders the result", async ({ page }) => {
-    const healthResponse = page.waitForResponse(
-      (r) => new URL(r.url()).pathname === HEALTH_PATH && r.request().method() === "GET",
-    );
-
-    await page.goto("/");
-
-    // The page must actually ask the API — a hardcoded "ok" on screen is not AC-1.7.
-    const response = await healthResponse;
-    expect(response.status()).toBe(200);
-    expect(await response.json()).toEqual({ ok: true });
-
-    // ...and the answer must reach the screen.
-    const readout = healthReadout(page);
-    await expect(readout).toBeVisible();
-    await expect(readout).toHaveText(/ok/i);
-    // Still showing a placeholder means the result was never rendered.
-    await expect(readout).not.toHaveText(/確認中|loading/i);
-    await expect(page.getByText(/{\s*"?ok"?\s*:\s*true\s*}/)).toBeVisible();
-  });
-
-  test("AC-1.7: what is rendered is derived from the response, not hardcoded", async ({ page }) => {
-    // If the API is unhealthy, the page must not keep claiming a healthy API.
-    // (How the failure is worded is Phase 6's concern; here it only must not lie.)
-    await page.route(HEALTH_PATH, (route) =>
-      route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) }),
-    );
-
-    await page.goto("/");
-
-    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    await expect(page.getByText(/{\s*"?ok"?\s*:\s*true\s*}/)).toHaveCount(0);
-    // Assert the readout exists before asserting what it does *not* say, so the
-    // negative check below cannot pass vacuously on a missing element.
-    await expect(healthReadout(page)).toBeVisible();
-    await expect(healthReadout(page)).not.toHaveText(/(^|[^n])ok\s*$/i);
-  });
-
-  test("AC-1.7: the rendered result survives a reload", async ({ page }) => {
-    await page.goto("/");
-    await expect(healthReadout(page)).toHaveText(/ok/i);
-
-    await page.reload();
-    await expect(healthReadout(page)).toHaveText(/ok/i);
+    expect(scripts.length, "the page loads a built bundle").toBeGreaterThan(0);
+    for (const src of scripts) expect(new URL(src).origin).toBe(origin);
+    // A production build must not need a dev server's client.
+    expect(scripts.join(" ")).not.toContain("/@vite/");
   });
 });

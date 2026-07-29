@@ -5,7 +5,7 @@ import { toISODate } from "../../../shared/domain.ts";
  * The browser's calendar day, kept current.
  *
  * **This is the only place in the app that asks what day it is** (docs/design.md
- * §1: the server never derives a date). Everything below the dashboard receives
+ * §1: a day is data, never inferred). Everything below the dashboard receives
  * the answer as a `YYYY-MM-DD` string.
  *
  * It used to be read once, on mount — which is fine until the tab is left open

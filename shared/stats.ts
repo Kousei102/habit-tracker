@@ -1,14 +1,16 @@
-import type { Achievable } from "../../shared/domain.ts";
-import { addDays, isAchieved, isISODate } from "../../shared/domain.ts";
-import type { HabitStats } from "../../shared/types.ts";
+import type { Achievable } from "./domain.ts";
+import { addDays, isAchieved, isISODate } from "./domain.ts";
+import type { HabitStats } from "./types.ts";
 
 /**
  * Streaks and achievement rates.
  *
  * Everything here is a pure function of (habit, records, today). No clock, no
- * database: `today` arrives as a `YYYY-MM-DD` string that the client decided
+ * storage: `today` arrives as a `YYYY-MM-DD` string that the browser decided
  * (docs/design.md), which is what makes these functions testable at all — and
- * what keeps the answer independent of the server's time zone.
+ * what kept the answer independent of the server's time zone back when there was
+ * a server. Moved here unchanged in Phase 7 (AC-7.13); it never touched the
+ * database, so there was nothing to rewrite.
  *
  * Two rules this file must not break:
  *
@@ -41,7 +43,7 @@ export type HabitDatedValue = DatedValue & { habit_id: number };
  * The set of days this habit counts as achieved, up to and including `today`.
  *
  * Records dated after `today` are ignored rather than trusted: a value written
- * for tomorrow (a client with a skewed clock, a manual API call) must not extend
+ * for tomorrow (a skewed clock, an edited storage document) must not extend
  * a streak into days that have not happened.
  */
 function achievedDates(
@@ -103,8 +105,8 @@ function longestStreak(achieved: ReadonlySet<string>): number {
  * The denominator is the **window**, not the habit's age: "直近 30 日の達成率"
  * is a question about the last 30 days, and a fixed denominator is the only one
  * a reader can verify from the two numbers shown next to it. (It is also the only
- * one that survives a pinned clock: `habits.created_at` is a server wall-clock
- * timestamp, unrelated to the calendar day the client is asking about.)
+ * one that survives a pinned clock: `habits.created_at` is a wall-clock
+ * timestamp, unrelated to the calendar day being asked about.)
  */
 function windowAchievements(achieved: ReadonlySet<string>, today: string): number {
   const start = addDays(today, -(RATE_WINDOW_DAYS - 1));

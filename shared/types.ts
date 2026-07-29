@@ -1,57 +1,27 @@
 /**
- * Types shared by client and server. Imported with a relative path and a real
- * ".ts" extension from both sides — there is no build step for this directory.
+ * The types the whole app is written against.
+ *
+ * They used to be "what crosses the wire" between client and server. There is no
+ * wire any more (Phase 7): the data lives in the browser, so these are simply the
+ * shapes the storage layer stores and the components read. The field names stay
+ * snake_case — they were the SQLite columns, and keeping them means the Phase 8
+ * export file reads the same as the database dump it replaces.
  */
-
-/** Response body of `GET /api/health`. */
-export type HealthResponse = {
-  ok: boolean;
-};
-
-/** Error body used by every API route that fails. */
-export type ErrorResponse = {
-  error: string;
-};
-
-/**
- * The authenticated user as the client is allowed to see it. Deliberately does
- * not carry `password_hash` — this type is what crosses the wire.
- */
-export type SessionUser = {
-  id: number;
-  username: string;
-};
-
-/** Request body of `POST /api/auth/login`. */
-export type LoginRequest = {
-  username: string;
-  password: string;
-};
-
-/** Response body of `POST /api/auth/login` and `GET /api/auth/me`. */
-export type MeResponse = {
-  user: SessionUser;
-};
-
-/** Response body of `POST /api/auth/logout`. */
-export type LogoutResponse = {
-  ok: boolean;
-};
 
 /**
  * How a habit is recorded.
  *
- * A union of string literals rather than an `enum`: the server runs .ts files
- * through Node's type stripping, where `enum` would need codegen.
+ * A union of string literals rather than an `enum`: the project type-checks with
+ * `erasableSyntaxOnly`, where `enum` would need codegen.
  */
 export type HabitKind = "boolean" | "numeric";
 
 /**
- * A habit as it crosses the wire. `user_id` is deliberately absent — the server
- * scopes every query by the session's user, so the client never needs it.
+ * One habit.
  *
- * Field names match the columns (snake_case) so that a row can be handed to the
- * client without a renaming layer that could silently drop a field.
+ * `archived_at` is the logical delete (docs/design.md §4): a deleted habit keeps
+ * its id and all of its entries, it just stops being listed. Nothing in the app
+ * ever removes an entry row.
  */
 export type Habit = {
   id: number;
@@ -75,44 +45,34 @@ export type Entry = {
   date: string;
   /** `boolean` habits store 0/1; `numeric` habits store the amount done. */
   value: number;
-  updated_at: string;
 };
 
-/** Request body of `POST /api/habits`. */
-export type CreateHabitRequest = {
+/** What the form hands to the storage layer to create a habit. */
+export type CreateHabitInput = {
   name: string;
   kind: HabitKind;
-  /** Required for `numeric`, ignored (stored as null) for `boolean`. */
+  /** Optional even for `numeric`: no goal means "any value above zero counts". */
   target?: number | null;
   unit?: string | null;
   color?: string;
 };
 
 /**
- * Request body of `PATCH /api/habits/:id`. Every field is optional; omitted
- * fields keep their stored value. `kind` cannot be changed.
+ * A partial edit of a habit. Omitted fields keep their stored value; an explicit
+ * `null` target clears the goal. `kind` cannot be changed — past entries were
+ * recorded in the old kind's terms.
  */
-export type UpdateHabitRequest = {
+export type UpdateHabitInput = {
   name?: string;
   target?: number | null;
   unit?: string | null;
   color?: string;
 };
 
-/** Request body of `PUT /api/entries/:habitId/:date`. */
-export type PutEntryRequest = {
-  value: number;
-};
-
-/** Response body of `DELETE /api/habits/:id`. */
-export type DeleteHabitResponse = {
-  ok: boolean;
-};
-
 /**
  * Streaks and achievement rate for one habit, as of a given day.
  *
- * The "given day" is always the `today` the client sent — see `StatsResponse`.
+ * The "given day" is always the `today` the browser decided (docs/design.md §1).
  * Both counts are in whole days.
  */
 export type HabitStats = {
@@ -130,12 +90,4 @@ export type HabitStats = {
   window_days: number;
   /** `achieved_days / window_days`, between 0 and 1. */
   achievement_rate: number;
-};
-
-/** Response body of `GET /api/stats?today=YYYY-MM-DD`. */
-export type StatsResponse = {
-  /** Echo of the requested day, so the client can tell a stale answer apart. */
-  today: string;
-  /** One entry per active habit, in the same order as `GET /api/habits`. */
-  stats: HabitStats[];
 };

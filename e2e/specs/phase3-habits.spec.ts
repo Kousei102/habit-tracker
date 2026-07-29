@@ -1,121 +1,94 @@
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { Locator, Page } from "@playwright/test";
-import { TODAY, expect, expectDashboardReady, test } from "../fixtures.ts";
-import { E2E_DB_PATH } from "../playwright.config.ts";
+import {
+  STORAGE_KEY,
+  TODAY,
+  addButton,
+  amountField,
+  checkbox,
+  daysAgo,
+  deleteButton,
+  editButton,
+  expect,
+  expectDashboardReady,
+  habitList,
+  habitRow,
+  kindOption,
+  nameField,
+  openDashboard,
+  readStorage,
+  saveButton,
+  targetField,
+  test,
+  unitField,
+} from "../fixtures.ts";
 
-// Phase 3 acceptance criteria under test here:
+// Phase 3 acceptance criteria under test here — all of them still in force after
+// Phase 7, which requires exactly this behaviour from the new storage (AC-7.7):
 //
 //   AC-3.1 [E2E] A `boolean` habit, once created, appears in the list.
 //   AC-3.2 [E2E] A `numeric` habit shows result and goal readably ("0 / 30 分").
 //   AC-3.3 [E2E] Ticking a boolean habit survives a reload.
 //   AC-3.4 [E2E] Below target reads 未達成, at/above target reads 達成; both survive a reload.
 //   AC-3.5 [E2E] Editing name and target is reflected in the list.
-//   AC-3.6 [E2E] A deleted habit leaves the list, but its `entries` rows stay in the DB.
-//   AC-3.7        A PUT to an unknown habit id — and to another user's — both answer 404,
-//                 indistinguishably.
-//   AC-3.8        A second PUT for the same date overwrites instead of duplicating.
+//   AC-3.6 [E2E] A deleted habit leaves the list, but its records stay stored.
 //
-// Everything on screen is addressed by role and accessible name; the two places
-// that look past the UI (the SQLite file, the HTTP status) are exactly the two
-// places where an AC talks about something the UI cannot show — "the record is
-// still in the database" and "the response must not leak existence".
+// AC-3.7 / AC-3.8 were retired with the HTTP API. What they were protecting —
+// "a record cannot be written against a habit that is not there" and "a second
+// write for the same day replaces rather than duplicates" — is still meaningful
+// at the storage layer, and is pinned at the bottom of this file.
+//
+// Everything on screen is addressed by role and accessible name. The one place
+// that looks past the UI is `localStorage`, which is where the AC about "the
+// record is still there after a delete" now points.
 //
 // The clock is pinned by the shared fixture (2026-03-15), so "today" is a
 // constant here and a midnight rollover cannot turn a pass into a failure.
 
 // ---------------------------------------------------------------------------
-// The database, read directly.
-//
-// The E2E database is wiped once per run, before the server starts, and is not
-// reset between tests — so every test below uses habit names of its own rather
-// than assuming an empty list.
+// The stored document, read directly.
 // ---------------------------------------------------------------------------
 
-const DB_FILE = path.resolve(import.meta.dirname, "../..", E2E_DB_PATH);
+type StoredHabit = {
+  id: number;
+  name: string;
+  kind: string;
+  target: number | null;
+  archived_at: string | null;
+};
+type StoredDocument = {
+  version: number;
+  next_habit_id: number;
+  habits: StoredHabit[];
+  entries: Record<string, Record<string, number>>;
+};
 
-function withDb<T>(fn: (db: DatabaseSync) => T): T {
-  const db = new DatabaseSync(DB_FILE);
-  try {
-    return fn(db);
-  } finally {
-    db.close();
+async function readDocument(page: Page): Promise<StoredDocument> {
+  const text = await readStorage(page);
+  expect(text, `nothing is stored under "${STORAGE_KEY}"`).not.toBeNull();
+  return JSON.parse(text as string) as StoredDocument;
+}
+
+/** The habit's stored id, by the name shown on screen. */
+async function habitIdByName(page: Page, name: string): Promise<number> {
+  const document = await readDocument(page);
+  const found = document.habits.find((habit) => habit.name === name);
+  if (found === undefined) {
+    throw new Error(`the stored document has no habit named ${JSON.stringify(name)}`);
   }
+  return found.id;
 }
 
-type EntryRow = { habit_id: number; date: string; value: number };
-
-function readEntries(habitId: number): EntryRow[] {
-  return withDb(
-    (db) =>
-      db
-        .prepare("SELECT habit_id, date, value FROM entries WHERE habit_id = ? ORDER BY date")
-        .all(habitId) as unknown as EntryRow[],
-  );
+/** Records for one habit, as `[date, value]` pairs sorted by date. */
+async function readEntries(page: Page, habitId: number): Promise<Array<[string, number]>> {
+  const document = await readDocument(page);
+  return Object.entries(document.entries[String(habitId)] ?? {}).sort(([a], [b]) => (a < b ? -1 : 1));
 }
 
-type HabitRowRecord = { id: number; name: string; target: number | null; archived_at: string | null };
-
-function readHabitRow(habitId: number): HabitRowRecord | undefined {
-  return withDb(
-    (db) =>
-      db.prepare("SELECT id, name, target, archived_at FROM habits WHERE id = ?").get(habitId) as unknown as
-        | HabitRowRecord
-        | undefined,
-  );
-}
-
-/**
- * Creates a habit that belongs to somebody else, straight in the database.
- *
- * AC-3.7 is about an id that exists but is not yours, and a single-user UI
- * cannot produce one. Seeding it here keeps the assertion honest: the id really
- * is present in `habits`, so a 404 can only come from the user scoping.
- */
-function seedForeignHabit(name: string): number {
-  return withDb((db) => {
-    const now = new Date().toISOString();
-
-    const existing = db.prepare("SELECT id FROM users WHERE username = ?").get("intruder") as
-      | { id: number }
-      | undefined;
-    const userId =
-      existing?.id ??
-      Number(
-        db
-          .prepare("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)")
-          .run("intruder", "not-a-real-hash", now).lastInsertRowid,
-      );
-
-    const inserted = db
-      .prepare(
-        `INSERT INTO habits (user_id, name, kind, target, unit, color, sort_order, archived_at, created_at)
-         VALUES (?, ?, 'boolean', NULL, NULL, 'blue', 0, NULL, ?)`,
-      )
-      .run(userId, name, now);
-
-    return Number(inserted.lastInsertRowid);
-  });
+async function readHabitRow(page: Page, habitId: number): Promise<StoredHabit | undefined> {
+  return (await readDocument(page)).habits.find((habit) => habit.id === habitId);
 }
 
 // ---------------------------------------------------------------------------
-// Screen vocabulary — role + accessible name only.
-// ---------------------------------------------------------------------------
-
-const habitList = (page: Page) => page.getByRole("list", { name: "習慣一覧" });
-const habitRow = (page: Page, name: string) => habitList(page).getByRole("listitem").filter({ hasText: name });
-
-const nameField = (page: Page) => page.getByLabel("習慣名");
-const targetField = (page: Page) => page.getByLabel("目標値");
-const unitField = (page: Page) => page.getByLabel("単位");
-const kindOption = (page: Page, label: "チェック式" | "数値式") => page.getByRole("radio", { name: label });
-const addButton = (page: Page) => page.getByRole("button", { name: "追加" });
-const saveButton = (page: Page) => page.getByRole("button", { name: "保存" });
-
-const checkbox = (page: Page, name: string) => page.getByRole("checkbox", { name });
-const amountField = (page: Page, name: string) => page.getByRole("spinbutton", { name });
-const editButton = (page: Page, name: string) => page.getByRole("button", { name: `${name} を編集` });
-const deleteButton = (page: Page, name: string) => page.getByRole("button", { name: `${name} を削除` });
 
 /**
  * Asserts the row reads as done / not done, in words a user can read.
@@ -145,32 +118,14 @@ async function createNumericHabit(page: Page, name: string, target: string, unit
   await expect(habitRow(page, name)).toBeVisible();
 }
 
-/** The habit's id as the API reports it — the same list the screen is drawn from. */
-async function habitIdByName(page: Page, name: string): Promise<number> {
-  const response = await page.request.get("/api/habits");
-  expect(response.status()).toBe(200);
+test.describe("Phase 3 — habits and today's record (AC-7.7)", () => {
+  test.beforeEach(async ({ page }) => {
+    // Every test starts from an empty browser: contexts are not shared, so the
+    // list below really is only what this test created.
+    await openDashboard(page);
+  });
 
-  const habits = (await response.json()) as Array<{ id: number; name: string }>;
-  const found = habits.find((habit) => habit.name === name);
-  if (found === undefined) {
-    throw new Error(`GET /api/habits does not contain ${JSON.stringify(name)}: ${JSON.stringify(habits)}`);
-  }
-
-  return found.id;
-}
-
-/** Runs `action` and returns the status of the entry PUT it triggered. */
-async function statusOfEntryWrite(page: Page, action: () => Promise<void>): Promise<number> {
-  const pending = page.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname.startsWith("/api/entries/") && response.request().method() === "PUT",
-  );
-  await action();
-  return (await pending).status();
-}
-
-test.describe("Phase 3 — habits and today's record", () => {
-  test("AC-3.1: a boolean habit appears in the list and is really stored", async ({ loggedInPage: page }) => {
+  test("AC-3.1: a boolean habit appears in the list and is really stored", async ({ page }) => {
     const name = "朝のストレッチ";
 
     // Nothing by that name before the user asks for it — otherwise the
@@ -186,22 +141,16 @@ test.describe("Phase 3 — habits and today's record", () => {
     await expect(amountField(page, name)).toHaveCount(0);
     await expectState(row, "未達成");
 
-    // The list must come back from the server, not from the form's own state.
+    // The list must come back from storage, not from the form's own state.
     await page.reload();
+    await expectDashboardReady(page);
     await expect(habitRow(page, name)).toHaveCount(1);
     await expect(checkbox(page, name)).toBeVisible();
   });
 
-  test("AC-3.1 control: submitting an empty name adds nothing", async ({ loggedInPage: page }) => {
-    // One habit of this test's own, first. Two reasons, both about the count
-    // below meaning something:
-    //   - `locator.count()` does not retry, and the panel renders no <ul> until
-    //     GET /api/habits has answered, so a count taken in that gap reads 0;
-    //   - if the expected count is 0, the assertion after the reload is
-    //     satisfied by the loading state and proves nothing.
-    // Creating a row makes the number non-zero and independent of which tests
-    // ran before this one. `createBooleanHabit` waits for the row, so the list
-    // is on screen by the time it returns.
+  test("AC-3.1 control: submitting an empty name adds nothing", async ({ page }) => {
+    // One habit of this test's own first, so the count below is non-zero and an
+    // assertion about "unchanged" cannot be satisfied by an unrendered list.
     await createBooleanHabit(page, "空欄チェックの基準");
 
     const rows = habitList(page).getByRole("listitem");
@@ -213,14 +162,12 @@ test.describe("Phase 3 — habits and today's record", () => {
 
     await expect(page.getByRole("alert")).toBeVisible();
     await page.reload();
-    // The list is back on screen before it is counted again — otherwise this
-    // compares a loaded page with an unloaded one.
     await expectDashboardReady(page);
     // A blank row appearing here would mean the form reports success it did not earn.
     await expect(rows).toHaveCount(before);
   });
 
-  test("AC-3.2: a numeric habit shows result and goal together", async ({ loggedInPage: page }) => {
+  test("AC-3.2: a numeric habit shows result and goal together", async ({ page }) => {
     const name = "瞑想タイム";
 
     await createNumericHabit(page, name, "30", "分");
@@ -232,78 +179,86 @@ test.describe("Phase 3 — habits and today's record", () => {
     await expectState(row, "未達成");
 
     await page.reload();
+    await expectDashboardReady(page);
     await expect(habitRow(page, name)).toContainText("0 / 30 分");
   });
 
-  test("AC-3.3: ticking a boolean habit survives a reload", async ({ loggedInPage: page }) => {
+  test("AC-3.3: ticking a boolean habit survives a reload", async ({ page }) => {
     const name = "水を飲む";
     await createBooleanHabit(page, name);
     const id = await habitIdByName(page, name);
 
-    const status = await statusOfEntryWrite(page, () => checkbox(page, name).check());
-    // A write that failed must not be able to leave the screen looking done.
-    expect(status).toBe(200);
+    await checkbox(page, name).check();
 
     await expectState(habitRow(page, name), "達成");
     await expect(checkbox(page, name)).toBeChecked();
+
+    // The write really landed before the reload — no request to wait for, so
+    // the storage is the thing to ask.
+    expect(await readEntries(page, id)).toEqual([[TODAY, 1]]);
 
     await page.reload();
+    await expectDashboardReady(page);
     await expect(checkbox(page, name)).toBeChecked();
     await expectState(habitRow(page, name), "達成");
-
-    // ...and the day it was recorded against is the pinned "today".
-    expect(readEntries(id).map((entry) => entry.date)).toContain(TODAY);
   });
 
-  test("AC-3.3: unticking survives a reload too", async ({ loggedInPage: page }) => {
+  test("AC-3.3: unticking survives a reload too", async ({ page }) => {
     const name = "ビタミン";
     await createBooleanHabit(page, name);
 
-    expect(await statusOfEntryWrite(page, () => checkbox(page, name).check())).toBe(200);
+    await checkbox(page, name).check();
     await expectState(habitRow(page, name), "達成");
 
-    expect(await statusOfEntryWrite(page, () => checkbox(page, name).uncheck())).toBe(200);
+    await checkbox(page, name).uncheck();
     await expectState(habitRow(page, name), "未達成");
 
     // A "clear" that only clears the screen is the mirror image of a save that
     // only saves the screen, and reloading is what tells them apart.
     await page.reload();
+    await expectDashboardReady(page);
     await expect(checkbox(page, name)).not.toBeChecked();
     await expectState(habitRow(page, name), "未達成");
   });
 
   test("AC-3.4: below the target reads 未達成, at the target reads 達成 — both across a reload", async ({
-    loggedInPage: page,
+    page,
   }) => {
     const name = "ランニング距離";
     await createNumericHabit(page, name, "5", "km");
 
-    expect(await statusOfEntryWrite(page, () => amountField(page, name).fill("3"))).toBe(200);
+    await amountField(page, name).fill("3");
+    await amountField(page, name).blur();
     await expectState(habitRow(page, name), "未達成");
     await expect(habitRow(page, name)).toContainText("3 / 5 km");
 
     await page.reload();
+    await expectDashboardReady(page);
     await expect(amountField(page, name)).toHaveValue("3");
     await expectState(habitRow(page, name), "未達成");
     await expect(habitRow(page, name)).toContainText("3 / 5 km");
 
     // Exactly on target counts as done.
-    expect(await statusOfEntryWrite(page, () => amountField(page, name).fill("5"))).toBe(200);
+    await amountField(page, name).fill("5");
+    await amountField(page, name).blur();
     await expectState(habitRow(page, name), "達成");
 
     await page.reload();
+    await expectDashboardReady(page);
     await expect(amountField(page, name)).toHaveValue("5");
     await expectState(habitRow(page, name), "達成");
     await expect(habitRow(page, name)).toContainText("5 / 5 km");
 
     // And above target stays done.
-    expect(await statusOfEntryWrite(page, () => amountField(page, name).fill("7.5"))).toBe(200);
+    await amountField(page, name).fill("7.5");
+    await amountField(page, name).blur();
     await page.reload();
+    await expectDashboardReady(page);
     await expectState(habitRow(page, name), "達成");
     await expect(habitRow(page, name)).toContainText("7.5 / 5 km");
   });
 
-  test("AC-3.5: editing the name and the target is reflected in the list", async ({ loggedInPage: page }) => {
+  test("AC-3.5: editing the name and the target is reflected in the list", async ({ page }) => {
     const original = "英単語";
     const renamed = "ドイツ語の暗記";
 
@@ -321,21 +276,24 @@ test.describe("Phase 3 — habits and today's record", () => {
     await expect(habitRow(page, original)).toHaveCount(0);
 
     await page.reload();
+    await expectDashboardReady(page);
     await expect(habitRow(page, renamed)).toContainText("0 / 50 個");
     await expect(habitRow(page, original)).toHaveCount(0);
 
     // Same habit, edited — not a new one left beside the old.
     expect(await habitIdByName(page, renamed)).toBe(id);
-    expect(readHabitRow(id)?.target).toBe(50);
+    expect((await readHabitRow(page, id))?.target).toBe(50);
+    expect((await readDocument(page)).habits).toHaveLength(1);
   });
 
-  test("AC-3.5: renaming a boolean habit works too, and keeps its record", async ({ loggedInPage: page }) => {
+  test("AC-3.5: renaming a boolean habit works too, and keeps its record", async ({ page }) => {
     const original = "散歩";
     const renamed = "夕方の散歩";
 
     await createBooleanHabit(page, original);
     const id = await habitIdByName(page, original);
-    expect(await statusOfEntryWrite(page, () => checkbox(page, original).check())).toBe(200);
+    await checkbox(page, original).check();
+    await expectState(habitRow(page, original), "達成");
 
     await editButton(page, original).click();
     // A check-style habit has no target to offer.
@@ -345,152 +303,124 @@ test.describe("Phase 3 — habits and today's record", () => {
 
     await expect(habitRow(page, renamed)).toHaveCount(1);
     await page.reload();
+    await expectDashboardReady(page);
     await expect(habitRow(page, renamed)).toHaveCount(1);
 
     // Renaming is not re-creating: same row, and today's tick is still there.
     expect(await habitIdByName(page, renamed)).toBe(id);
     await expectState(habitRow(page, renamed), "達成");
-    expect(readEntries(id)).toHaveLength(1);
+    expect(await readEntries(page, id)).toEqual([[TODAY, 1]]);
   });
 
-  test("AC-3.6: deleting removes the habit from the list but keeps its entries", async ({
-    loggedInPage: page,
-  }) => {
+  test("AC-3.6 / AC-7.7: deleting removes the habit from the list but keeps its records", async ({ page }) => {
     const name = "腕立て伏せ";
     await createBooleanHabit(page, name);
     const id = await habitIdByName(page, name);
 
-    expect(await statusOfEntryWrite(page, () => checkbox(page, name).check())).toBe(200);
+    await checkbox(page, name).check();
     await expectState(habitRow(page, name), "達成");
     // The record exists before the delete, so "still there afterwards" means something.
-    expect(readEntries(id)).toHaveLength(1);
+    expect(await readEntries(page, id)).toEqual([[TODAY, 1]]);
 
     await deleteButton(page, name).click();
     await expect(habitRow(page, name)).toHaveCount(0);
 
     await page.reload();
-    // "Not in the list" has to be read from a loaded list; during the fetch every
-    // row is absent, this one included.
+    // "Not in the list" has to be read from a rendered list.
     await expectDashboardReady(page);
     await expect(habitRow(page, name)).toHaveCount(0);
 
-    // Logical delete: the history the heatmap will need must survive.
-    const entries = readEntries(id);
-    expect(entries, `entries for habit ${id} were physically deleted`).toHaveLength(1);
-    expect(entries[0]?.date).toBe(TODAY);
-    expect(entries[0]?.value).toBe(1);
+    // Logical delete: the history Phase 8's export will need must survive.
+    expect(
+      await readEntries(page, id),
+      `entries for habit ${id} were physically deleted`,
+    ).toEqual([[TODAY, 1]]);
 
-    // The habit row itself is kept and flagged, rather than removed.
-    const stored = readHabitRow(id);
-    expect(stored, `habits row ${id} was physically deleted`).toBeDefined();
+    // The habit itself is kept and flagged, rather than removed.
+    const stored = await readHabitRow(page, id);
+    expect(stored, `habit ${id} was physically deleted`).toBeDefined();
     expect(stored?.archived_at ?? null).not.toBeNull();
-
-    // ...and it is genuinely gone from the user's list, not merely hidden client-side.
-    const listed = (await (await page.request.get("/api/habits")).json()) as Array<{ id: number }>;
-    expect(listed.map((habit) => habit.id)).not.toContain(id);
   });
 
-  test("AC-3.7: unknown and foreign habit ids are both 404, and indistinguishable", async ({
-    loggedInPage: page,
-  }) => {
-    const foreignId = seedForeignHabit("他人の秘密の習慣");
-    // The seed really is in the table — otherwise the 404 below proves nothing.
-    expect(readHabitRow(foreignId)).toBeDefined();
-
-    const unknownId = 987_654_321;
-    expect(readHabitRow(unknownId)).toBeUndefined();
-
-    const unknown = await page.request.put(`/api/entries/${unknownId}/${TODAY}`, { data: { value: 1 } });
-    const foreign = await page.request.put(`/api/entries/${foreignId}/${TODAY}`, { data: { value: 1 } });
-
-    expect(unknown.status()).toBe(404);
-    expect(foreign.status()).toBe(404);
-    // Byte-identical bodies: any difference is an existence oracle.
-    expect(await foreign.text()).toBe(await unknown.text());
-
-    // Nothing was written for the other user's habit.
-    expect(readEntries(foreignId)).toHaveLength(0);
-
-    // ...and it is not visible anywhere else either.
-    const listed = (await (await page.request.get("/api/habits")).json()) as Array<{ id: number }>;
-    expect(listed.map((habit) => habit.id)).not.toContain(foreignId);
-
-    const entries = (await (await page.request.get("/api/entries")).json()) as Array<{ habit_id: number }>;
-    expect(entries.map((entry) => entry.habit_id)).not.toContain(foreignId);
-  });
-
-  test("AC-3.8: a second PUT for the same date overwrites instead of duplicating", async ({
-    loggedInPage: page,
-  }) => {
-    const created = await page.request.post("/api/habits", {
-      data: { name: "スクワット", kind: "numeric", target: 50, unit: "回" },
-    });
-    expect(created.status()).toBe(201);
-    const id = ((await created.json()) as { id: number }).id;
-
-    const first = await page.request.put(`/api/entries/${id}/${TODAY}`, { data: { value: 10 } });
-    expect(first.status()).toBe(200);
-    const second = await page.request.put(`/api/entries/${id}/${TODAY}`, { data: { value: 25 } });
-    expect(second.status()).toBe(200);
-
-    // One row, holding the later value.
-    const rows = readEntries(id).filter((entry) => entry.date === TODAY);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.value).toBe(25);
-
-    const listed = (await (await page.request.get(`/api/entries?from=${TODAY}&to=${TODAY}`)).json()) as Array<{
-      habit_id: number;
-      value: number;
-    }>;
-    const mine = listed.filter((entry) => entry.habit_id === id);
-    expect(mine).toHaveLength(1);
-    expect(mine[0]?.value).toBe(25);
-
-    // A different date is a different row, not another overwrite.
-    const yesterday = "2026-03-14";
-    expect((await page.request.put(`/api/entries/${id}/${yesterday}`, { data: { value: 5 } })).status()).toBe(200);
-    expect(readEntries(id)).toHaveLength(2);
-  });
-
-  test("control: a rejected save is not shown as success", async ({ loggedInPage: page }) => {
-    const name = "夜のヨガ";
+  test("AC-3.6: the undo brings the habit back with the records it kept", async ({ page }) => {
+    const name = "P3_取り消し_腕立て";
     await createBooleanHabit(page, name);
     const id = await habitIdByName(page, name);
-
-    await page.route("**/api/entries/**", async (route) => {
-      if (route.request().method() !== "PUT") return route.fallback();
-      await route.fulfill({
-        status: 500,
-        contentType: "application/json",
-        body: JSON.stringify({ error: "サーバーエラー" }),
-      });
-    });
-
     await checkbox(page, name).check();
-
-    // The user has to be told; a silent swallow here is what makes AC-3.3's
-    // "still achieved after a reload" impossible to trust.
-    await expect(habitRow(page, name).getByRole("alert")).toBeVisible();
-
-    await page.unroute("**/api/entries/**");
-    await page.reload();
-
-    await expect(checkbox(page, name)).not.toBeChecked();
-    await expectState(habitRow(page, name), "未達成");
-    expect(readEntries(id)).toHaveLength(0);
-  });
-
-  test("interpretation: a deleted habit no longer accepts records", async ({ loggedInPage: page }) => {
-    const name = "使わない習慣";
-    await createBooleanHabit(page, name);
-    const id = await habitIdByName(page, name);
 
     await deleteButton(page, name).click();
     await expect(habitRow(page, name)).toHaveCount(0);
 
-    // Not required by an AC; recorded here because Phase 4's streaks will read
-    // these rows and the answer needs to be pinned somewhere.
-    const response = await page.request.put(`/api/entries/${id}/${TODAY}`, { data: { value: 1 } });
-    expect(response.status()).toBe(404);
+    await page.getByRole("button", { name: "削除を取り消す" }).click();
+    await expect(habitRow(page, name)).toBeVisible();
+
+    await page.reload();
+    await expectDashboardReady(page);
+    await expect(habitRow(page, name)).toBeVisible();
+    await expect(checkbox(page, name)).toBeChecked();
+    expect((await readHabitRow(page, id))?.archived_at ?? null).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // What AC-3.7 / AC-3.8 were protecting, now that there is no HTTP layer.
+  // -------------------------------------------------------------------------
+
+  test("AC-3.8 (storage): recording the same day twice replaces the value instead of duplicating it", async ({
+    page,
+  }) => {
+    const name = "スクワット";
+    await createNumericHabit(page, name, "50", "回");
+    const id = await habitIdByName(page, name);
+
+    const field = amountField(page, name);
+    await field.fill("10");
+    await field.blur();
+    await field.fill("25");
+    await field.blur();
+
+    // One day, one value — the later one.
+    await expect
+      .poll(async () => await readEntries(page, id))
+      .toEqual([[TODAY, 25]]);
+
+    await page.reload();
+    await expectDashboardReady(page);
+    await expect(amountField(page, name)).toHaveValue("25");
+  });
+
+  test("interpretation: a deleted habit is gone from every view, and its records stay put", async ({ page }) => {
+    const name = "使わない習慣";
+    await createBooleanHabit(page, name);
+    const id = await habitIdByName(page, name);
+    await checkbox(page, name).check();
+
+    await deleteButton(page, name).click();
+    await expect(habitRow(page, name)).toHaveCount(0);
+
+    await page.reload();
+    await expectDashboardReady(page);
+
+    // Not on the today panel and not in the statistics…
+    await expect(habitRow(page, name)).toHaveCount(0);
+    await expect(page.getByRole("list", { name: "習慣の統計" }).getByRole("listitem")).toHaveCount(0);
+    // …but still in the heatmap's picker, named as deleted, because its records
+    // are still drawn.
+    await expect(page.getByRole("option", { name: `${name}（削除済み）` })).toHaveCount(1);
+    expect(await readEntries(page, id)).toEqual([[TODAY, 1]]);
+  });
+
+  test("interpretation: a record dated before the habit existed is still kept and shown", async ({ page }) => {
+    // Nothing in the app clamps by `created_at` (AC-4.9 is explicit about it),
+    // and with the browser's clock pinned, `created_at` is in the future
+    // relative to the seeded history of every other spec here.
+    await openDashboard(page, {
+      habits: [{ id: 1, name: "P3_過去の記録", kind: "boolean", created_at: "2026-03-15T09:00:00.000Z" }],
+      entries: { 1: { [daysAgo(10)]: 1 } },
+    });
+
+    // Read in the habit's own view: the default 「全体」 view labels a cell
+    // "0 / 1 習慣 達成", which is a count and not this habit's own reading.
+    await page.getByLabel("表示する習慣").selectOption({ label: "P3_過去の記録" });
+    await expect(page.getByRole("gridcell", { name: `${daysAgo(10)} 達成` })).toHaveCount(1);
   });
 });

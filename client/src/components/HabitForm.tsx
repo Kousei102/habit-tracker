@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { formatValue } from "../../../shared/domain.ts";
-import type { CreateHabitRequest, Habit, HabitKind, UpdateHabitRequest } from "../../../shared/types.ts";
+import type { CreateHabitInput, Habit, HabitKind, UpdateHabitInput } from "../../../shared/types.ts";
 import { describeError } from "../errors.ts";
 
 /**
@@ -10,7 +10,7 @@ import { describeError } from "../errors.ts";
  * One component for both jobs on purpose: "name and target" must mean the same
  * thing when creating and when editing, and two forms would drift apart.
  *
- * The kind cannot be changed after creation (the server refuses it too): past
+ * The kind cannot be changed after creation (the store refuses it too): past
  * entries were recorded in the old kind's terms, and silently reinterpreting
  * them would rewrite history.
  */
@@ -18,8 +18,9 @@ import { describeError } from "../errors.ts";
 type HabitFormProps = {
   /** The habit being edited, or null to create a new one. */
   habit: Habit | null;
-  onCreate: (input: CreateHabitRequest) => Promise<unknown>;
-  onUpdate: (id: number, patch: UpdateHabitRequest) => Promise<unknown>;
+  /** Throws when the habit cannot be saved; the message lands under the fields. */
+  onCreate: (input: CreateHabitInput) => unknown;
+  onUpdate: (id: number, patch: UpdateHabitInput) => unknown;
   onCancelEdit: () => void;
 };
 
@@ -55,7 +56,7 @@ export function HabitForm({ habit, onCreate, onUpdate, onCancelEdit }: HabitForm
     setError(null);
   }, [habit]);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+  function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     if (pending) return;
 
@@ -68,8 +69,8 @@ export function HabitForm({ habit, onCreate, onUpdate, onCancelEdit }: HabitForm
     // Only numeric habits carry a target, and an empty box means "no goal" —
     // `isAchieved()` then counts any value above zero (docs/design.md §2). That
     // is the only way to *remove* a goal, so the field cannot be mandatory; what
-    // is still rejected here (before the round trip, and again on the server) is
-    // a number that is not one: 0, negative, or not a number at all.
+    // is still rejected here (and again in the store) is a number that is not
+    // one: 0, negative, or not a number at all.
     let parsedTarget: number | null = null;
     if (kind === "numeric" && target.trim() !== "") {
       parsedTarget = Number(target.trim());
@@ -84,7 +85,7 @@ export function HabitForm({ habit, onCreate, onUpdate, onCancelEdit }: HabitForm
 
     try {
       if (habit === null) {
-        await onCreate({
+        onCreate({
           name: trimmedName,
           kind,
           target: parsedTarget,
@@ -96,15 +97,15 @@ export function HabitForm({ habit, onCreate, onUpdate, onCancelEdit }: HabitForm
         setUnit("");
         setKind("boolean");
       } else {
-        await onUpdate(habit.id, {
+        onUpdate(habit.id, {
           name: trimmedName,
           target: parsedTarget,
           unit: kind === "numeric" ? unit.trim() || null : null,
         });
       }
     } catch (cause) {
-      // Beside the fields the user just filled in, whatever failed: a validation
-      // 400, a 500, or the server not answering at all (AC-6.4).
+      // Beside the fields the user just filled in, whatever failed: a rejected
+      // value, or storage that is full or unavailable (AC-7.12).
       setError(describeError(cause, "保存できませんでした"));
     } finally {
       setPending(false);

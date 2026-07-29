@@ -6,28 +6,22 @@
     "node": ">=22.18"
   },
   "workspaces": [
-    "client",
-    "server"
+    "client"
   ],
   "scripts": {
-    "dev": "concurrently -k -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
-    "dev:server": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env --watch server/src/index.ts",
-    "dev:client": "npm run dev --workspace client",
+    "dev": "npm run dev --workspace client",
     "build": "npm run build --workspace client",
-    "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env server/src/index.ts",
-    "seed-user": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env server/scripts/seed-user.ts",
-    "backup": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env server/scripts/backup.ts",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p server/tsconfig.json && tsc --noEmit -p client/tsconfig.json",
-    "test": "node --disable-warning=ExperimentalWarning --test \"server/src/**/*.test.ts\" \"shared/**/*.test.ts\" \"client/src/**/*.test.ts\"",
+    "preview": "npm run preview --workspace client",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p client/tsconfig.json",
+    "test": "node --disable-warning=ExperimentalWarning --test \"shared/**/*.test.ts\" \"client/src/**/*.test.ts\"",
     "e2e": "playwright test --config e2e/playwright.config.ts",
     "e2e:report": "playwright show-report .harness/tmp/playwright-report",
     "harness:smoke": "playwright test --config .harness/smoke/smoke.config.ts",
-    "e2e:serve": "npm run build --workspace client && node --disable-warning=ExperimentalWarning server/src/index.ts"
+    "e2e:serve": "npm run build --workspace client && npm run preview --workspace client -- --port 3101 --strictPort"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",
     "@types/node": "^22.15.0",
-    "concurrently": "^10.0.4",
     "typescript": "^5.9.3"
   }
 }

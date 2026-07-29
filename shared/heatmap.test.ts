@@ -261,9 +261,9 @@ describe("monthMarks", () => {
 describe("indexEntries", () => {
   it("groups records by date and habit", () => {
     const entries: Entry[] = [
-      { habit_id: 1, date: "2026-03-14", value: 1, updated_at: "" },
-      { habit_id: 2, date: "2026-03-14", value: 30, updated_at: "" },
-      { habit_id: 1, date: "2026-03-15", value: 0, updated_at: "" },
+      { habit_id: 1, date: "2026-03-14", value: 1 },
+      { habit_id: 2, date: "2026-03-14", value: 30 },
+      { habit_id: 1, date: "2026-03-15", value: 0 },
     ];
 
     const index = indexEntries(entries);

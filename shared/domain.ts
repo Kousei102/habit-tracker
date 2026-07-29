@@ -1,10 +1,10 @@
 import type { Habit } from "./types.ts";
 
 /**
- * Domain rules shared by client and server.
+ * The domain rules of the whole app.
  *
- * Everything here is a pure function of its arguments — no clock, no database,
- * no DOM — so both sides can import it and `node:test` can cover it directly.
+ * Everything here is a pure function of its arguments — no clock, no storage,
+ * no DOM — so anything can import it and `node:test` can cover it directly.
  */
 
 /**
@@ -19,8 +19,8 @@ export type Achievable = Pick<Habit, "kind" | "target">;
  *   boolean … value >= 1
  *   numeric … value >= target when a target is set, otherwise value > 0
  *
- * The display (client) and the streak/rate maths (server) must agree, and the
- * only way to guarantee that is for both to call this. Writing the same
+ * The display, the streak/rate maths and the heatmap must all agree, and the
+ * only way to guarantee that is for all of them to call this. Writing the same
  * comparison a second time anywhere is the bug this function exists to prevent:
  * fix one copy and the screen says "achieved" while the streak stays at zero.
  *
@@ -63,8 +63,8 @@ export function isISODate(value: unknown): value is string {
 /**
  * Formats a `Date` as `YYYY-MM-DD` using its **local** calendar fields.
  *
- * This is how the client answers "what day is it", and it is the one place the
- * clock is read at all (see docs/design.md: the server never derives a date).
+ * This is how the app answers "what day is it", and it is the one place the
+ * clock is read at all (docs/design.md §1: a day is always data, never inferred).
  * `toISOString().slice(0, 10)` would be wrong here — at 09:00 JST it still says
  * yesterday, which is exactly the class of bug this design avoids.
  */

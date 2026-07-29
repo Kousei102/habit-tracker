@@ -1,10 +1,24 @@
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { Page } from "@playwright/test";
-import { TODAY, daysAgo, expect, expectDashboardReady, test } from "../fixtures.ts";
-import { E2E_DB_PATH } from "../playwright.config.ts";
+import {
+  TODAY,
+  amountField,
+  byDaysAgo,
+  cellFor,
+  checkbox,
+  daysAgo,
+  expect,
+  expectDashboardReady,
+  expectHeatmapReady,
+  habitRow,
+  heatmapGrid,
+  heatmapPicker,
+  openDashboard,
+  readStorage,
+  test,
+} from "../fixtures.ts";
 
-// Phase 5 acceptance criteria under test here:
+// Phase 5 acceptance criteria under test here — still in force after Phase 7,
+// which requires the same drawing rules from the new storage (AC-7.9):
 //
 //   AC-5.1 [E2E] A year of heatmap is drawn; 7 rows × 52–53 columns of cells.
 //   AC-5.2 [E2E] A day with a record is painted differently from a day without one.
@@ -28,68 +42,21 @@ import { E2E_DB_PATH } from "../playwright.config.ts";
 // **The clock is pinned** (2026-03-15, shared fixture) and every seeded day is an
 // offset from it. A heatmap is a year of "which day is it" answers; against a real
 // clock this file would decay silently.
-//
-// The E2E database is wiped once per run and shared by all specs, so the *overall*
-// view's denominator is whatever habits earlier phases left behind. Assertions
-// that need a known denominator use the per-habit view; assertions that only need
-// "recorded vs not" use days far enough back (200+) that no other spec has touched
-// them.
-
-const DB_FILE = path.resolve(import.meta.dirname, "../..", E2E_DB_PATH);
-
-function readEntryDates(habitId: number): string[] {
-  const db = new DatabaseSync(DB_FILE);
-  try {
-    return (
-      db.prepare("SELECT date FROM entries WHERE habit_id = ? ORDER BY date").all(habitId) as unknown as Array<{
-        date: string;
-      }>
-    ).map((row) => row.date);
-  } finally {
-    db.close();
-  }
-}
-
-function readEntryValue(habitId: number, date: string): number | undefined {
-  const db = new DatabaseSync(DB_FILE);
-  try {
-    const row = db.prepare("SELECT value FROM entries WHERE habit_id = ? AND date = ?").get(habitId, date) as
-      | { value: number }
-      | undefined;
-    return row?.value;
-  } finally {
-    db.close();
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Screen vocabulary — role and accessible name only.
 // ---------------------------------------------------------------------------
 
 const heatmapHeading = (page: Page) => page.getByRole("heading", { name: "年間ヒートマップ" });
-const heatmapGrid = (page: Page) => page.getByRole("grid", { name: /年間ヒートマップ/ });
-const habitPicker = (page: Page) => page.getByLabel("表示する習慣");
-const cellFor = (page: Page, date: string) => page.getByRole("gridcell", { name: date });
-
-const habitList = (page: Page) => page.getByRole("list", { name: "習慣一覧" });
-const habitRow = (page: Page, name: string) => habitList(page).getByRole("listitem").filter({ hasText: name });
-const amountField = (page: Page, name: string) => page.getByRole("spinbutton", { name });
-const checkbox = (page: Page, name: string) => page.getByRole("checkbox", { name });
-
-/** Waits until the heatmap has finished loading, whichever way it went. */
-async function expectHeatmapReady(page: Page): Promise<void> {
-  await expect(heatmapHeading(page)).toBeVisible();
-  await expect(heatmapGrid(page)).toBeVisible();
-}
 
 /** Switches the heatmap to one habit, and waits for the grid to say so. */
 async function showHabit(page: Page, name: string): Promise<void> {
-  await habitPicker(page).selectOption({ label: name });
+  await heatmapPicker(page).selectOption({ label: name });
   await expect(page.getByRole("grid", { name: `${name} の年間ヒートマップ` })).toBeVisible();
 }
 
 async function showOverall(page: Page): Promise<void> {
-  await habitPicker(page).selectOption({ label: "全体" });
+  await heatmapPicker(page).selectOption({ label: "全体" });
   await expect(page.getByRole("grid", { name: "全体 の年間ヒートマップ" })).toBeVisible();
 }
 
@@ -127,9 +94,6 @@ type RowInfo = { label: string; names: string[] };
 /**
  * The grid as a screen reader meets it: rows in the order they are announced,
  * each with the accessible names of its cells.
- *
- * Read through the ARIA attributes rather than the class names, so a restyle
- * cannot break this and a broken a11y tree cannot pass it.
  */
 async function readRows(page: Page): Promise<RowInfo[]> {
   return heatmapGrid(page).evaluate((svg) =>
@@ -156,39 +120,21 @@ function weekdayNameOf(date: string): string {
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
 
-// ---------------------------------------------------------------------------
-// Seeding. Only today is editable through the UI, so history goes in over the
-// same endpoint the UI itself calls.
-// ---------------------------------------------------------------------------
-
-type HabitInput = { name: string; kind: "boolean" | "numeric"; target?: number; unit?: string };
-
-async function createHabit(page: Page, input: HabitInput): Promise<number> {
-  const response = await page.request.post("/api/habits", { data: input });
-  expect(response.status(), `POST /api/habits ${input.name}: ${await response.text()}`).toBe(201);
-  return ((await response.json()) as { id: number }).id;
+/** The dates one habit has records for, read out of the stored document. */
+async function readEntryDates(page: Page, habitId: number): Promise<string[]> {
+  const text = await readStorage(page);
+  const stored = JSON.parse(text ?? "null") as { entries: Record<string, Record<string, number>> } | null;
+  return Object.keys(stored?.entries?.[String(habitId)] ?? {}).sort();
 }
 
-/** Writes one value per day, keyed by "days before the pinned today". */
-async function seedDays(page: Page, habitId: number, byDaysAgo: Record<number, number>): Promise<void> {
-  for (const [offset, value] of Object.entries(byDaysAgo)) {
-    const date = daysAgo(Number(offset));
-    const response = await page.request.put(`/api/entries/${habitId}/${date}`, { data: { value } });
-    expect(response.status(), `PUT /api/entries/${habitId}/${date} = ${value}: ${await response.text()}`).toBe(200);
-  }
-}
-
-test.describe("Phase 5 — year heatmap", () => {
+test.describe("Phase 5 — year heatmap (AC-7.9)", () => {
   // -------------------------------------------------------------------------
   // AC-5.1
   // -------------------------------------------------------------------------
 
-  test("AC-5.1: a year of cells, 7 rows by 52–53 columns, ending on today", async ({ loggedInPage: page }) => {
-    // The panel only draws once there is something to draw, so give it a habit
-    // of its own rather than relying on what earlier specs left behind.
-    await createHabit(page, { name: "HM_基準_描画", kind: "boolean" });
-    await page.reload();
-    await expectDashboardReady(page);
+  test("AC-5.1: a year of cells, 7 rows by 52–53 columns, ending on today", async ({ page }) => {
+    // The panel only draws once there is something to draw.
+    await openDashboard(page, { habits: [{ id: 1, name: "HM_基準_描画", kind: "boolean" }] });
     await expectHeatmapReady(page);
 
     const rows = await readRows(page);
@@ -223,13 +169,11 @@ test.describe("Phase 5 — year heatmap", () => {
     );
     expect(span, "the cells cover consecutive days with no holes").toBe(dates.length);
 
-    // Today is reachable by name, as the right-hand edge of the drawing.
     await expect(cellFor(page, TODAY)).toHaveCount(1);
   });
 
-  test("AC-5.1: each row is labelled with the weekday its cells actually fall on", async ({
-    loggedInPage: page,
-  }) => {
+  test("AC-5.1: each row is labelled with the weekday its cells actually fall on", async ({ page }) => {
+    await openDashboard(page, { habits: [{ id: 1, name: "HM_曜日ラベル", kind: "boolean" }] });
     await expectHeatmapReady(page);
     const rows = await readRows(page);
 
@@ -237,15 +181,10 @@ test.describe("Phase 5 — year heatmap", () => {
       const dates = row.names.map((name) => name.slice(0, 10));
       const weekdays = new Set(dates.map(weekdayNameOf));
 
-      // The grid is anchored on today rather than on a Sunday, so a row's
-      // weekday is whatever today's offset makes it — but it must be *one*
-      // weekday, and the label must be that one.
       expect(weekdays.size, `row ${index} mixes weekdays: ${[...weekdays].join(", ")}`).toBe(1);
       expect(row.label, `row ${index} label vs its dates (${dates[0]})`).toBe(weekdayNameOf(dates[0] as string));
     }
 
-    // ...and the seven rows are seven different weekdays, not the same one seven
-    // times.
     expect(new Set(rows.map((row) => row.label)).size).toBe(7);
   });
 
@@ -253,18 +192,16 @@ test.describe("Phase 5 — year heatmap", () => {
   // AC-5.4
   // -------------------------------------------------------------------------
 
-  test("AC-5.4: every cell announces its date, and a recorded day announces its value", async ({
-    loggedInPage: page,
-  }) => {
+  test("AC-5.4: every cell announces its date, and a recorded day announces its value", async ({ page }) => {
     const name = "HM_ラベル_読書";
-    const id = await createHabit(page, { name, kind: "numeric", target: 30, unit: "分" });
-
     const done = daysAgo(220);
     const short = daysAgo(221);
     const blank = daysAgo(222);
-    await seedDays(page, id, { 220: 30, 221: 12 });
 
-    await page.reload();
+    await openDashboard(page, {
+      habits: [{ id: 1, name, kind: "numeric", target: 30, unit: "分" }],
+      entries: { 1: byDaysAgo({ 220: 30, 221: 12 }) },
+    });
     await expectHeatmapReady(page);
 
     // Every one of the cells, not just the interesting ones: a name that is
@@ -279,7 +216,6 @@ test.describe("Phase 5 — year heatmap", () => {
 
     await showHabit(page, name);
 
-    // Reached the way a screen reader reaches it, and carrying the value.
     await expect(cellFor(page, done)).toHaveAccessibleName(`${done} 30 / 30 分 達成`);
     await expect(cellFor(page, short)).toHaveAccessibleName(`${short} 12 / 30 分 未達成`);
     await expect(cellFor(page, blank)).toHaveAccessibleName(`${blank} 記録なし`);
@@ -294,21 +230,20 @@ test.describe("Phase 5 — year heatmap", () => {
   // AC-5.2
   // -------------------------------------------------------------------------
 
-  test("AC-5.2: a recorded day is painted differently from a day with no record", async ({
-    loggedInPage: page,
-  }) => {
+  test("AC-5.2: a recorded day is painted differently from a day with no record", async ({ page }) => {
     const name = "HM_記録あり_散歩";
-    const id = await createHabit(page, { name, kind: "boolean" });
-
     const doneDay = daysAgo(300);
     const missedDay = daysAgo(301); // recorded, explicitly not done
-    const blankDay = daysAgo(302); // no row at all
-    await seedDays(page, id, { 300: 1, 301: 0 });
+    const blankDay = daysAgo(302); // no record at all
+
+    await openDashboard(page, {
+      habits: [{ id: 1, name, kind: "boolean" }],
+      entries: { 1: byDaysAgo({ 300: 1, 301: 0 }) },
+    });
 
     // The three days really are what the test says they are.
-    expect(readEntryDates(id).sort()).toEqual([doneDay, missedDay].sort());
+    expect(await readEntryDates(page, 1)).toEqual([doneDay, missedDay].sort());
 
-    await page.reload();
     await expectHeatmapReady(page);
     await showHabit(page, name);
 
@@ -328,9 +263,7 @@ test.describe("Phase 5 — year heatmap", () => {
 
     // The same must hold in the view a user first lands on.
     await showOverall(page);
-    expect(await fillOf(page, doneDay), "overall view: recorded vs blank").not.toBe(
-      await fillOf(page, blankDay),
-    );
+    expect(await fillOf(page, doneDay), "overall view: recorded vs blank").not.toBe(await fillOf(page, blankDay));
     expect(await fillOf(page, missedDay), "overall view: recorded-but-not-done vs blank").not.toBe(
       await fillOf(page, blankDay),
     );
@@ -340,11 +273,8 @@ test.describe("Phase 5 — year heatmap", () => {
   // AC-5.3
   // -------------------------------------------------------------------------
 
-  test("AC-5.3: for a numeric habit, a higher ratio to the goal is a darker cell", async ({
-    loggedInPage: page,
-  }) => {
+  test("AC-5.3: for a numeric habit, a higher ratio to the goal is a darker cell", async ({ page }) => {
     const name = "HM_濃淡_瞑想";
-    const id = await createHabit(page, { name, kind: "numeric", target: 30, unit: "分" });
 
     // Six days, strictly increasing towards the goal of 30.
     const values: Array<[number, number]> = [
@@ -355,9 +285,11 @@ test.describe("Phase 5 — year heatmap", () => {
       [204, 29],
       [205, 30],
     ];
-    await seedDays(page, id, Object.fromEntries(values));
 
-    await page.reload();
+    await openDashboard(page, {
+      habits: [{ id: 1, name, kind: "numeric", target: 30, unit: "分" }],
+      entries: { 1: byDaysAgo(Object.fromEntries(values)) },
+    });
     await expectHeatmapReady(page);
     // The overall view's shade is "achieved habits / all habits", so a single
     // numeric habit short of its goal is one flat step there whatever the value.
@@ -433,17 +365,15 @@ test.describe("Phase 5 — year heatmap", () => {
   // AC-5.6
   // -------------------------------------------------------------------------
 
-  test("AC-5.6: no-record and the faintest recorded day differ in light and in dark mode", async ({
-    loggedInPage: page,
-  }) => {
+  test("AC-5.6: no-record and the faintest recorded day differ in light and in dark mode", async ({ page }) => {
     const name = "HM_配色_水やり";
-    const id = await createHabit(page, { name, kind: "boolean" });
-
     const faintDay = daysAgo(250); // recorded, not done — the lightest ink there is
     const blankDay = daysAgo(251);
-    await seedDays(page, id, { 250: 0 });
 
-    await page.reload();
+    await openDashboard(page, {
+      habits: [{ id: 1, name, kind: "boolean" }],
+      entries: { 1: byDaysAgo({ 250: 0 }) },
+    });
     await expectHeatmapReady(page);
     await showHabit(page, name);
 
@@ -471,17 +401,16 @@ test.describe("Phase 5 — year heatmap", () => {
     }
 
     await page.emulateMedia({ colorScheme: "light" });
-    expect(readEntryDates(id)).toEqual([faintDay]);
+    expect(await readEntryDates(page, 1)).toEqual([faintDay]);
   });
 
   // -------------------------------------------------------------------------
   // AC-5.5
   // -------------------------------------------------------------------------
 
-  test("AC-5.5: at 375px only the heatmap's container scrolls sideways", async ({ loggedInPage: page }) => {
+  test("AC-5.5: at 375px only the heatmap's container scrolls sideways", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 720 });
-    await page.reload();
-    await expectDashboardReady(page);
+    await openDashboard(page, { habits: [{ id: 1, name: "HM_狭い画面", kind: "boolean" }] });
     await expectHeatmapReady(page);
 
     const measurements = await heatmapGrid(page).evaluate((svg) => {
@@ -533,8 +462,6 @@ test.describe("Phase 5 — year heatmap", () => {
       375,
     );
 
-    // The page itself does not scroll sideways. One pixel of slack for
-    // sub-pixel layout rounding; anything a user could actually drag is larger.
     expect(
       measurements.bodyScrollWidth,
       `document.body scrolls sideways: ${JSON.stringify(measurements)}`,
@@ -554,9 +481,8 @@ test.describe("Phase 5 — year heatmap", () => {
   // AC-5.7
   // -------------------------------------------------------------------------
 
-  test("AC-5.7: the grid is inline SVG drawn by the page, not a charting canvas", async ({
-    loggedInPage: page,
-  }) => {
+  test("AC-5.7: the grid is inline SVG drawn by the page, not a charting canvas", async ({ page }) => {
+    await openDashboard(page, { habits: [{ id: 1, name: "HM_SVG確認", kind: "boolean" }] });
     await expectHeatmapReady(page);
 
     const drawing = await heatmapGrid(page).evaluate((element) => ({
@@ -572,6 +498,20 @@ test.describe("Phase 5 — year heatmap", () => {
     expect(drawing.canvases, "nothing is drawn on a canvas").toBe(0);
   });
 
+  test("AC-5.7: no charting library shipped in the bundle", async ({ page }) => {
+    await page.goto("/");
+    const sources = await page
+      .locator("script[src]")
+      .evaluateAll((nodes) => nodes.map((node) => (node as HTMLScriptElement).src));
+
+    for (const src of sources) {
+      const body = await (await page.request.get(src)).text();
+      for (const library of ["chart.js", "d3-", "echarts", "highcharts", "plotly", "recharts", "victory"]) {
+        expect(body.toLowerCase(), `${library} appears in the bundle`).not.toContain(library);
+      }
+    }
+  });
+
   // -------------------------------------------------------------------------
   // Regression: Phase 5 put a 300 ms debounce on the numeric field
   // (client/src/components/TodayPanel.tsx). AC-3.4 says a typed value survives a
@@ -579,14 +519,9 @@ test.describe("Phase 5 — year heatmap", () => {
   // away, before the timer expires.
   // -------------------------------------------------------------------------
 
-  test("AC-3.4 regression: a value typed and reloaded immediately is not lost", async ({
-    loggedInPage: page,
-  }) => {
+  test("AC-3.4 regression: a value typed and reloaded immediately is not lost", async ({ page }) => {
     const name = "HM_デバウンス_腹筋";
-    const id = await createHabit(page, { name, kind: "numeric", target: 50, unit: "回" });
-
-    await page.reload();
-    await expectDashboardReady(page);
+    await openDashboard(page, { habits: [{ id: 1, name, kind: "numeric", target: 50, unit: "回" }] });
 
     // Typed and then reloaded with no wait at all: the debounce has not fired.
     await amountField(page, name).fill("42");
@@ -595,17 +530,12 @@ test.describe("Phase 5 — year heatmap", () => {
     await expectDashboardReady(page);
     await expect(amountField(page, name)).toHaveValue("42");
     await expect(habitRow(page, name)).toContainText("42 / 50 回");
-    expect(readEntryValue(id, TODAY), "the typed value reached the database").toBe(42);
+    expect(await readEntryDates(page, 1), "the typed value never reached storage").toEqual([TODAY]);
   });
 
-  test("AC-3.4 regression: typing digit by digit stores the final value, once", async ({
-    loggedInPage: page,
-  }) => {
+  test("AC-3.4 regression: typing digit by digit stores the final value, once", async ({ page }) => {
     const name = "HM_デバウンス_連打";
-    const id = await createHabit(page, { name, kind: "numeric", target: 100, unit: "回" });
-
-    await page.reload();
-    await expectDashboardReady(page);
+    await openDashboard(page, { habits: [{ id: 1, name, kind: "numeric", target: 100, unit: "回" }] });
 
     const field = amountField(page, name);
     await field.click();
@@ -621,25 +551,24 @@ test.describe("Phase 5 — year heatmap", () => {
     await expectDashboardReady(page);
 
     await expect(amountField(page, name)).toHaveValue("120");
-    expect(readEntryValue(id, TODAY)).toBe(120);
-    // One day, one row — the debounce must not have written 1, 12 and 120 as
-    // three separate records, and must not have lost the last one.
-    expect(readEntryDates(id)).toEqual([TODAY]);
+    // One day, one record — the debounce must not have written 1, 12 and 120 as
+    // three separate days, and must not have lost the last one.
+    expect(await readEntryDates(page, 1)).toEqual([TODAY]);
+    const stored = JSON.parse((await readStorage(page)) as string) as {
+      entries: Record<string, Record<string, number>>;
+    };
+    expect(stored.entries["1"]?.[TODAY]).toBe(120);
   });
 
-  test("AC-3.3 regression: the checkbox still writes immediately", async ({ loggedInPage: page }) => {
+  test("AC-3.3 regression: the checkbox still writes immediately", async ({ page }) => {
     const name = "HM_デバウンス_チェック";
-    const id = await createHabit(page, { name, kind: "boolean" });
-
-    await page.reload();
-    await expectDashboardReady(page);
+    await openDashboard(page, { habits: [{ id: 1, name, kind: "boolean" }] });
 
     await checkbox(page, name).check();
     await page.reload();
 
     await expectDashboardReady(page);
     await expect(checkbox(page, name)).toBeChecked();
-    expect(readEntryValue(id, TODAY)).toBe(1);
   });
 
   // -------------------------------------------------------------------------
@@ -647,14 +576,9 @@ test.describe("Phase 5 — year heatmap", () => {
   // ACs leave open, not because an AC demands them.
   // -------------------------------------------------------------------------
 
-  test("interpretation: recording today repaints the heatmap without a reload", async ({
-    loggedInPage: page,
-  }) => {
+  test("interpretation: recording today repaints the heatmap without a reload", async ({ page }) => {
     const name = "HM_即時反映_日記";
-    await createHabit(page, { name, kind: "boolean" });
-
-    await page.reload();
-    await expectDashboardReady(page);
+    await openDashboard(page, { habits: [{ id: 1, name, kind: "boolean" }] });
     await expectHeatmapReady(page);
     await showHabit(page, name);
 
@@ -665,5 +589,31 @@ test.describe("Phase 5 — year heatmap", () => {
 
     await expect(cellFor(page, TODAY)).toHaveAccessibleName(`${TODAY} 達成`);
     expect(await fillOf(page, TODAY), "today's cell did not repaint").not.toBe(before);
+  });
+
+  test("AC-7.7: a deleted habit's year is still drawable, named as deleted", async ({ page }) => {
+    const name = "HM_削除済み_ヨガ";
+    await openDashboard(page, {
+      habits: [
+        { id: 1, name: "HM_生存_散歩", kind: "boolean" },
+        { id: 2, name, kind: "boolean", archived_at: "2026-03-10T00:00:00.000Z" },
+      ],
+      entries: { 2: byDaysAgo({ 100: 1 }) },
+    });
+    await expectHeatmapReady(page);
+
+    await showHabit(page, `${name}（削除済み）`);
+    await expect(cellFor(page, daysAgo(100))).toHaveAccessibleName(`${daysAgo(100)} 達成`);
+    // ...and it is not offered anywhere a live habit would be.
+    await expect(habitRow(page, name)).toHaveCount(0);
+  });
+
+  test("heatmap panel: the drawn window is announced and ends on today", async ({ page }) => {
+    await openDashboard(page, { habits: [{ id: 1, name: "HM_期間表示", kind: "boolean" }] });
+    await expectHeatmapReady(page);
+
+    await expect(heatmapHeading(page)).toBeVisible();
+    await expect(heatmapGrid(page)).toHaveAccessibleName(new RegExp(`〜 ${TODAY}）$`));
+    await expect(page.getByTestId("heatmap-range")).toContainText(`〜 ${TODAY}`);
   });
 });

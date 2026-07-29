@@ -11,9 +11,9 @@ import type { StatsStatus } from "../hooks/useStats.ts";
  * decoration: the percentage and the raw "5 / 30 日" are always spelled out, so
  * nothing here is carried by colour or length alone.
  *
- * No maths lives in this file. Every number arrives from `GET /api/stats`, which
- * computes it with the shared `isAchieved()` rule; recomputing anything here
- * would be the second definition of "done" the design forbids.
+ * No maths lives in this file. Every number arrives from `shared/stats.ts`,
+ * which computes it with the shared `isAchieved()` rule; recomputing anything
+ * here would be the second definition of "done" the design forbids.
  */
 
 type StatsPanelProps = {
