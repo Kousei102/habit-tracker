@@ -46,6 +46,12 @@ function serviceWorker(): Plugin {
 
     closeBundle() {
       const dist = path.resolve(root, outDir);
+
+      // `closeBundle` also runs when the build failed, and at that point dist may
+      // not exist. Walking it anyway replaces the real error with `ENOENT …
+      // scandir 'dist'`, which sends you looking in the wrong place entirely.
+      if (!fs.existsSync(dist)) return;
+
       const source = fs.readFileSync(path.resolve(root, "sw.js"), "utf8");
 
       /** Every file in dist, as a path relative to it. */
@@ -92,6 +98,19 @@ function serviceWorker(): Plugin {
 }
 
 export default defineConfig({
+  // Relative, so one build runs at the root of a domain *and* under a
+  // subdirectory — which is what GitHub Pages gives a project repository
+  // (`/habit-tracker/`). The alternative, hardcoding that prefix, would mean the
+  // bytes the E2E suite exercises at the root are not the bytes that get
+  // deployed; here they are the same file.
+  //
+  // Everything downstream was already written for this: index.html and the
+  // manifest use `./`, pwa.ts registers `${BASE_URL}sw.js` with a matching scope,
+  // and sw.js resolves the injected paths against its own location. The one thing
+  // this forbids is serving the app from a nested path (`/app/some/route`), since
+  // relative asset URLs would resolve one directory too deep — fine, because
+  // there is one screen and no router.
+  base: "./",
   plugins: [react(), serviceWorker()],
   server: {
     port: 5173,

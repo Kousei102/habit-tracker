@@ -1,0 +1,65 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [master, main]
+  # So a broken deploy can be re-run, or a good one re-published, without
+  # inventing an empty commit.
+  workflow_dispatch:
+
+# Pages needs to be told what this workflow is allowed to do; the default token
+# cannot publish.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never two deploys at once, and — unlike CI — do not cancel one that is already
+# running: a half-applied deploy is worse than a redundant one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # Deliberately separate from CI rather than a step inside it. CI runs on pull
+  # requests too, and a pull request must not be able to publish.
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      # The gate. The site is the users' only copy of their records, so it is not
+      # published unless the types and the unit tests are clean. The E2E suite is
+      # not repeated here — CI already ran it on this same commit, and holding the
+      # deploy for a second browser download buys nothing.
+      - run: npm run typecheck
+      - run: npm test
+
+      # No `base` to configure: client/vite.config.ts uses a relative base, so
+      # this same output works at a domain root and under /habit-tracker/.
+      - run: npm run build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: client/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

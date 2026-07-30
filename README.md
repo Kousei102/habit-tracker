@@ -104,11 +104,45 @@ npm run preview   # 生成物をそのまま配信して確認（http://localhos
 
 `client/dist` の中身は HTML / CSS / JS / PNG だけです。Node プロセスは要らないので、
 任意の静的ホスティング（GitHub Pages, Cloudflare Pages, Netlify …）にそのまま
-置けます。サーバー側の設定は **`/` 以外のパスも `index.html` に返す**（SPA
-フォールバック）だけで、それも今のところ画面が 1 つしかないため必須ではありません。
+置けます。SPA フォールバック（`/` 以外のパスも `index.html` に返す）は**不要**です。
+画面が 1 つしかなく、オフライン時は Service Worker が自分でシェルに寄せるためです。
 
 ホーム画面への追加（PWA）を成立させるには **HTTPS が必要**です（`localhost` は例外）。
 上記のホスティングはいずれも既定で HTTPS です。
+
+## デプロイ（GitHub Pages）
+
+`master` / `main` に push すると `.github/workflows/deploy.yml` が
+型チェック → 単体テスト → ビルド → 公開まで行います。落ちたら公開されません。
+
+初回だけリポジトリ側の設定が必要です。
+
+1. GitHub のリポジトリ → **Settings** → **Pages**
+2. **Build and deployment** の **Source** を「**GitHub Actions**」にする
+   （「Deploy from a branch」ではありません）
+3. 次の push、または Actions タブから **Deploy to GitHub Pages** を手動実行
+
+公開先は `https://<ユーザー名>.github.io/<リポジトリ名>/` です。
+
+### `base` を設定しなくてよい理由
+
+GitHub Pages のプロジェクトページはサブディレクトリ配信になります
+（`/habit-tracker/`）。`client/vite.config.ts` は `base: "./"`、つまり**相対**なので、
+**同じビルド成果物がドメイン直下でもサブディレクトリでも動きます**。E2E は直下で
+実行していますが、検証しているバイト列は公開されるものと同一です。
+
+代償は、**ネストしたパスを URL に直接入れても動かない**ことです
+（`/habit-tracker/foo/bar` は相対パスが 1 階層深く解決される）。オフライン時は
+Service Worker がシェルへ 302 で寄せるので実害はなく、画面が 1 つでルーターも
+無いため通常この URL には到達しません。ルーティングを足すときはここを直してください。
+
+### 注意: `github.io` は origin をユーザー単位で共有します
+
+`https://<ユーザー名>.github.io/` 配下のプロジェクトページは、**すべて同じ origin**
+です。`localStorage` は origin 単位なので、同じアカウントで別のアプリを GitHub Pages
+に置くと、**記録は同じ保存領域に同居します**。このアプリのキーは `habit-tracker`
+で名前空間が分かれているため衝突はしませんが、別のアプリが `localStorage.clear()` を
+呼べば記録は消えます。気になるなら独自ドメインか Cloudflare Pages を使ってください。
 
 ## PWA と Service Worker
 

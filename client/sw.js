@@ -115,6 +115,14 @@ self.addEventListener("fetch", (event) => {
  * router — so an offline navigation to any path is answered with the cached
  * shell. That is also what makes the app work on a static host with no SPA
  * fallback.
+ *
+ * Offline, a navigation to some *other* path is answered with a redirect rather
+ * than with the shell's bytes. The build uses a relative `base` so that it runs
+ * unchanged at a domain root and under a subdirectory, and the price of that is
+ * that the shell's asset URLs are only correct at the shell's own URL: handing
+ * those bytes to `/app/deep/path` resolves them to `/app/deep/assets/…` and
+ * paints nothing. Redirecting first costs one extra intercepted navigation and
+ * lands the user on a working app.
  */
 async function networkFirstShell(request) {
   const cache = await caches.open(CACHE_NAME);
@@ -127,6 +135,10 @@ async function networkFirstShell(request) {
     return response;
   } catch (cause) {
     const cached = await cache.match(SHELL, MATCH);
+
+    // Guarded on `cached` so a miss still reaches the offline notice below, and
+    // on the URL so the redirect cannot target the request that caused it.
+    if (cached && request.url !== SHELL) return Response.redirect(SHELL, 302);
     if (cached) return cached;
 
     // Nothing cached and no network: say so in the user's language rather than
