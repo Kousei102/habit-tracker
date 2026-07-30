@@ -3,6 +3,11 @@
 個人用の習慣トラッカー。**サーバーはありません。** ブラウザだけで動く静的サイトで、
 記録は開いている端末の `localStorage` に保存されます。
 
+**公開先: https://kousei102.github.io/habit-tracker/**
+
+iPhone から使う場合は、**Safari で上記を開いてホーム画面に追加**してください。
+理由は下の警告のとおりで、見た目の問題ではなく記録が消えるかどうかの問題です。
+
 - 仕様と受け入れ基準: [`docs/phases.md`](docs/phases.md)
 - 設計の背景: [`docs/design.md`](docs/design.md)
 
