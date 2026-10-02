@@ -9,6 +9,7 @@ import { useToday } from "../hooks/useToday.ts";
 import { BackupPanel } from "./BackupPanel.tsx";
 import { HabitForm } from "./HabitForm.tsx";
 import { HeatmapPanel } from "./HeatmapPanel.tsx";
+import { RemindersPanel } from "./RemindersPanel.tsx";
 import { StatsPanel } from "./StatsPanel.tsx";
 import { TodayPanel } from "./TodayPanel.tsx";
 
@@ -216,6 +217,12 @@ export function Dashboard() {
         onEdit={setEditing}
         onDelete={handleDelete}
       />
+
+      {/* Only when the document is readable. A count of what is undone is
+          meaningless over data we could not load, and AC-8.12 is about the
+          backup panel being the thing in reach in that state — not about adding
+          another card above it. */}
+      {!broken && <RemindersPanel habits={habits} values={values} />}
 
       <StatsPanel
         today={today}

@@ -375,3 +375,67 @@ describe("the last export date (AC-8.9)", () => {
     assert.doesNotThrow(() => store.setLastExportDate("2026-03-15"));
   });
 });
+
+describe("the badge preference (AC-9.9)", () => {
+  it("is off until the user opts in", () => {
+    store.setStorageBackend(memoryStorage());
+    assert.equal(store.getBadgeEnabled(), false);
+  });
+
+  it("round-trips both answers", () => {
+    store.setStorageBackend(memoryStorage());
+
+    store.setBadgeEnabled(true);
+    assert.equal(store.getBadgeEnabled(), true);
+
+    store.setBadgeEnabled(false);
+    assert.equal(store.getBadgeEnabled(), false);
+  });
+
+  it("lives outside the document, so it survives an unreadable one", () => {
+    const backend = memoryStorage("{ this is not json");
+    store.setStorageBackend(backend);
+
+    store.setBadgeEnabled(true);
+
+    assert.equal(store.getBadgeEnabled(), true);
+    // …and writing it did not touch the document being protected.
+    assert.equal(backend.raw(), "{ this is not json");
+  });
+
+  it("is not disturbed by replacing or resetting the document", () => {
+    // The whole reason it is a separate key: an imported file describes someone's
+    // habits, not the notification permission this device happens to hold.
+    const backend = memoryStorage();
+    store.setStorageBackend(backend);
+    store.setBadgeEnabled(true);
+
+    store.createHabit({ name: "散歩", kind: "boolean" });
+    store.resetAll();
+
+    assert.equal(store.getBadgeEnabled(), true);
+  });
+
+  it("treats a garbage stored value as off", () => {
+    const backend = memoryStorage();
+    backend.setItem("habit-tracker.badge", "たぶん");
+    store.setStorageBackend(backend);
+
+    assert.equal(store.getBadgeEnabled(), false);
+  });
+
+  it("survives storage that cannot be read or written", () => {
+    // A browser blocking site data must cost the user a badge, not the app.
+    store.setStorageBackend({
+      getItem: () => {
+        throw new Error("nope");
+      },
+      setItem: () => {
+        throw new Error("nope");
+      },
+    });
+
+    assert.doesNotThrow(() => store.setBadgeEnabled(true));
+    assert.equal(store.getBadgeEnabled(), false);
+  });
+});

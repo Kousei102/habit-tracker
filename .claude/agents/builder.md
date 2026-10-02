@@ -2,7 +2,7 @@
 name: builder
 description: docs/phases.md の指定されたフェーズを実装する。製品コードと単体テストを担当し、E2E 仕様や受け入れ基準には触れない
 tools: Read, Write, Edit, Bash, Glob, Grep, Skill
-model: opus
+model: sonnet
 effort: high
 color: blue
 permissionMode: acceptEdits

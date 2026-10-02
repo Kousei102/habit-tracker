@@ -312,3 +312,54 @@ export function setLastExportDate(today: string): void {
     console.error("[store] could not record the export date:", cause);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Whether the app icon carries a badge (AC-9.9)
+// ---------------------------------------------------------------------------
+
+/**
+ * Its own key, for the same three reasons as `LAST_EXPORT_KEY` above: it has to
+ * stay readable when the document is not, it is a fact about *this device* (the
+ * notification permission it holds is not portable) rather than about the data,
+ * and importing a file must not silently turn the badge on or off. Keeping it out
+ * of the document also means the setting costs no schema version.
+ */
+const BADGE_KEY = "habit-tracker.badge";
+
+/** The only value that means yes. Anything else — absent, stale, garbage — is no. */
+const BADGE_ON = "on";
+
+/**
+ * Whether the user opted in to the app-icon badge. Off unless they said so.
+ *
+ * Opt-in rather than opt-out because turning it on requires asking for the
+ * notification permission, and a permission prompt on first load — before the
+ * user has any habits to be reminded about — is how an app gets denied
+ * permanently.
+ */
+export function getBadgeEnabled(): boolean {
+  try {
+    return storage().getItem(BADGE_KEY) === BADGE_ON;
+  } catch {
+    // Storage being unavailable is not worth an error message of its own here:
+    // without a badge the app is merely a little less useful, and the panel that
+    // would show the message works either way.
+    return false;
+  }
+}
+
+/**
+ * Records the badge preference. Best effort, like `setLastExportDate`.
+ *
+ * A preference that could not be written must not throw its way out to the
+ * button that set it: the badge for *this* session is already correct by the time
+ * this runs, and failing the interaction over a lost note about it would be the
+ * tail wagging the dog.
+ */
+export function setBadgeEnabled(on: boolean): void {
+  try {
+    storage().setItem(BADGE_KEY, on ? BADGE_ON : "off");
+  } catch (cause) {
+    console.error("[store] could not record the badge preference:", cause);
+  }
+}

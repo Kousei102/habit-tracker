@@ -64,6 +64,100 @@ export function requestPersistentStorage(): Promise<boolean> {
   return persistence;
 }
 
+// ---------------------------------------------------------------------------
+// The app icon badge (Phase 9)
+// ---------------------------------------------------------------------------
+
+/**
+ * `navigator` with the two Badging API methods, which TypeScript's DOM lib does
+ * not declare. Optional because most browsers do not have them: this is a
+ * capability check, not a cast that pretends they are there.
+ */
+type BadgeNavigator = Navigator & {
+  setAppBadge?: (count?: number) => Promise<void>;
+  clearAppBadge?: () => Promise<void>;
+};
+
+/**
+ * Whether this browser can put a number on the app icon.
+ *
+ * Read by the panel to say "this device does not support it" instead of offering
+ * a button that would do nothing. Note that support is not permission: iOS has
+ * the API and still refuses to draw anything until notifications are allowed.
+ */
+export function supportsBadge(): boolean {
+  return typeof (navigator as BadgeNavigator).setAppBadge === "function";
+}
+
+/**
+ * Puts `count` on the app icon, or clears it at zero.
+ *
+ * Fire-and-forget on purpose: the caller is a React effect reacting to a changed
+ * count, and there is nothing it could do with a rejection. Both methods reject
+ * when the app is not installed or the permission is missing, which is the normal
+ * case in a plain browser tab — so a swallowed rejection here is expected
+ * behaviour and not a bug being hidden. What must never happen is an unhandled
+ * rejection reaching the page (AC-9.7, AC-9.8).
+ */
+export function setBadge(count: number): void {
+  const nav = navigator as BadgeNavigator;
+
+  try {
+    if (count <= 0) {
+      // `setAppBadge(0)` is specified to clear as well, but `clearAppBadge` is
+      // the one that is present on every implementation that ships either.
+      void nav.clearAppBadge?.()?.catch(() => undefined);
+      return;
+    }
+
+    void nav.setAppBadge?.(count)?.catch(() => undefined);
+  } catch (cause) {
+    // A synchronous throw is out of spec, but a badge is a nicety and the app
+    // behind it is not.
+    console.warn("[pwa] the app badge could not be updated:", cause);
+  }
+}
+
+/** The permission states, without depending on the DOM lib's enum spelling. */
+export type BadgePermission = "default" | "granted" | "denied" | "unsupported";
+
+/** What the browser says right now, without asking the user anything. */
+export function notificationPermission(): BadgePermission {
+  if (typeof Notification === "undefined") return "unsupported";
+
+  const current = Notification.permission;
+  if (current === "granted" || current === "denied") return current;
+  return "default";
+}
+
+/**
+ * Asks for the notification permission the badge needs on iOS.
+ *
+ * **Must be called from a user gesture.** Safari rejects (and Chrome warns) when
+ * `requestPermission()` is not driven by a click, which is why nothing in
+ * `initPwa()` calls this and the panel puts it behind an explicit button.
+ *
+ * The app does not send notifications — there is no server to send them from
+ * (docs/phases.md, Phase 9). The permission is required because WebKit ties the
+ * Badging API to it: a number on the home-screen icon is a notification as far as
+ * iOS is concerned.
+ */
+export async function requestNotificationPermission(): Promise<BadgePermission> {
+  const current = notificationPermission();
+  // Already answered, either way. Asking again cannot change a denial — only the
+  // user can, in the browser's own settings — and re-prompting a granted origin
+  // is a prompt for nothing.
+  if (current !== "default") return current;
+
+  try {
+    const result = await Notification.requestPermission();
+    return result === "granted" || result === "denied" ? result : "default";
+  } catch (cause) {
+    console.warn("[pwa] the notification permission could not be requested:", cause);
+    return "denied";
+  }
+}
+
 async function registerServiceWorker(): Promise<void> {
   if (!("serviceWorker" in navigator)) {
     setState("unsupported");
